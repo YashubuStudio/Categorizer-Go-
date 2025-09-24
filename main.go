@@ -1458,7 +1458,6 @@ func parseCategoryText(s string) []string {
 
 func main() {
 	cfg := defaultConfig()
-	cfg = applyEnvOverrides(cfg)
 	ensureDirs(cfg.CacheDir)
 	ensureSeedFile(cfg.SeedFile, defaultUserCategories)
 
