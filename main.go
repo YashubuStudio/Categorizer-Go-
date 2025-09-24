@@ -967,11 +967,23 @@ func parseInputTexts(text string) []string {
 }
 
 func classifyRecords(ctx context.Context, service *categorizer.Service, records []categorizer.InputRecord) ([]categorizer.ResultRow, error) {
+	log.Printf("classifyRecords: received %d records", len(records))
+	for i, rec := range records {
+		log.Printf("classifyRecords input[%d]: index=%q title=%q body=%q text=%q", i, rec.Index, rec.Title, rec.Body, rec.Text)
+	}
 	texts := make([]string, len(records))
 	for i, rec := range records {
 		texts[i] = rec.Text
 	}
-	return service.ClassifyAll(ctx, texts)
+	rows, err := service.ClassifyAll(ctx, texts)
+	if err != nil {
+		log.Printf("classifyRecords: classification error: %v", err)
+		return nil, err
+	}
+	for i, row := range rows {
+		log.Printf("classifyRecords result[%d]: text=%q suggestions=%v ndcSuggestions=%v", i, row.Text, row.Suggestions, row.NDCSuggestions)
+	}
+	return rows, nil
 }
 
 func buildResultRecords(records []categorizer.InputRecord, rows []categorizer.ResultRow) [][]string {
@@ -1000,11 +1012,14 @@ func saveResultsCSV(outputDir string, records []categorizer.InputRecord, rows []
 	if len(records) != len(rows) {
 		return "", fmt.Errorf("records/results length mismatch: %d vs %d", len(records), len(rows))
 	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return "", fmt.Errorf("create output dir: %w", err)
+	log.Printf("saveResultsCSV: preparing to save %d rows (records=%d)", len(rows), len(records))
+	dir, err := ensureOutputDir(outputDir)
+	if err != nil {
+		return "", err
 	}
 	filename := fmt.Sprintf("result_%s.csv", time.Now().Format("200601021504"))
-	path := filepath.Join(outputDir, filename)
+	path := filepath.Join(dir, filename)
+	log.Printf("saveResultsCSV: output path resolved to %s", path)
 	f, err := os.Create(path)
 	if err != nil {
 		return "", fmt.Errorf("create result file: %w", err)
@@ -1012,16 +1027,42 @@ func saveResultsCSV(outputDir string, records []categorizer.InputRecord, rows []
 	defer f.Close()
 	writer := csv.NewWriter(f)
 	data := buildResultRecords(records, rows)
+	for i, row := range data {
+		log.Printf("saveResultsCSV row[%d]: %v", i, row)
+	}
 	for _, row := range data {
 		if err := writer.Write(row); err != nil {
+			log.Printf("saveResultsCSV: failed writing row %v: %v", row, err)
 			return "", fmt.Errorf("write result: %w", err)
 		}
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
+		log.Printf("saveResultsCSV: flush error: %v", err)
 		return "", fmt.Errorf("flush result: %w", err)
 	}
+	log.Printf("saveResultsCSV: successfully wrote file %s", path)
 	return path, nil
+}
+
+func ensureOutputDir(outputDir string) (string, error) {
+	dir := strings.TrimSpace(outputDir)
+	if dir == "" {
+		dir = "csv"
+	}
+	log.Printf("ensureOutputDir: requested path %q", outputDir)
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		log.Printf("ensureOutputDir: failed to resolve %q: %v", dir, err)
+		return "", fmt.Errorf("resolve output dir: %w", err)
+	}
+	log.Printf("ensureOutputDir: resolved absolute path %s", absDir)
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		log.Printf("ensureOutputDir: failed to create directory %s: %v", absDir, err)
+		return "", fmt.Errorf("create output dir %s: %w", absDir, err)
+	}
+	log.Printf("ensureOutputDir: directory ready %s", absDir)
+	return absDir, nil
 }
 
 func pickBestSuggestion(row categorizer.ResultRow) (categorizer.Suggestion, bool) {
