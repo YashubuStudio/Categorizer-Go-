@@ -166,6 +166,16 @@ func (s *Service) SeedCount() int {
 	return s.seedsIdx.Size()
 }
 
+// SeedLabels returns the normalized seed labels currently indexed.
+func (s *Service) SeedLabels() []string {
+	items := s.seedsIdx.Items()
+	labels := make([]string, len(items))
+	for i, it := range items {
+		labels[i] = it.Label
+	}
+	return labels
+}
+
 // ClassifyAll embeds all texts and returns ranked suggestions.
 func (s *Service) ClassifyAll(ctx context.Context, texts []string) ([]ResultRow, error) {
 	start := time.Now()
