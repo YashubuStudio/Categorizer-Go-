@@ -46,7 +46,9 @@ const (
 	ModeMixed  = "mixed"
 	ModeSplit  = "split"
 
-	fyneAppID = "studio.yashubu.categorizer"
+	fyneAppID       = "studio.yashubu.categorizer"
+	seedFileEnvVar  = "CATEGORIZER_SEED_FILE"
+	defaultSeedFile = "config/categories_seed.txt"
 )
 
 var modeChoices = []struct {
@@ -89,6 +91,7 @@ type Config struct {
 	MaxSeqLen     int
 
 	CacheDir string
+	SeedFile string
 }
 
 func defaultConfig() Config {
@@ -105,6 +108,7 @@ func defaultConfig() Config {
 		TokenizerPath: "./models/bge-m3/tokenizer.json",
 		MaxSeqLen:     512,
 		CacheDir:      "./cache",
+		SeedFile:      defaultSeedFile,
 	}
 }
 
@@ -143,6 +147,14 @@ func sanitizeConfig(cfg Config) Config {
 	}
 	if cfg.Thresh.Mean <= 0 {
 		cfg.Thresh.Mean = 0.50
+	}
+	cfg.SeedFile = strings.TrimSpace(cfg.SeedFile)
+	return cfg
+}
+
+func applyEnvOverrides(cfg Config) Config {
+	if v := strings.TrimSpace(os.Getenv(seedFileEnvVar)); v != "" {
+		cfg.SeedFile = v
 	}
 	return cfg
 }
@@ -192,6 +204,19 @@ var defaultUserCategories = []string{
 	"教育②",
 	"機械学習",
 	"社会",
+}
+
+func initialUserCategories(seedFile string) ([]string, bool, error) {
+	fallback := uniqueNormalized(defaultUserCategories)
+	path := strings.TrimSpace(seedFile)
+	if path == "" {
+		return fallback, false, nil
+	}
+	cats, err := loadCategorySeedFile(path)
+	if err != nil {
+		return fallback, false, err
+	}
+	return cats, true, nil
 }
 
 // ------------------------------
@@ -347,11 +372,22 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 
+	initialCats, fromFile, catErr := initialUserCategories(cfg.SeedFile)
+	if catErr != nil {
+		if errors.Is(catErr, os.ErrNotExist) {
+			fmt.Printf("カテゴリシードファイルが見つかりませんでした (%s): %v\n", cfg.SeedFile, catErr)
+		} else {
+			fmt.Printf("カテゴリシードファイルの読み込みに失敗しました (%s): %v\n", cfg.SeedFile, catErr)
+		}
+	} else if fromFile {
+		fmt.Printf("カテゴリシードを %s から読み込みました (%d件)\n", cfg.SeedFile, len(initialCats))
+	}
+
 	svc := &Service{
 		cfg:      cfg,
 		emb:      enc,
 		cache:    newEmbedCache(cfg.CacheDir, filepath.Base(cfg.ModelPath)),
-		userCats: uniqueNormalized(defaultUserCategories),
+		userCats: initialCats,
 		ndcItems: append([]ndcItem(nil), defaultNDCLabels...),
 	}
 
@@ -1393,6 +1429,19 @@ func detectTextColumn(header []string) int {
 	return -1
 }
 
+func loadCategorySeedFile(path string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	labels := parseCategoryText(string(data))
+	cats := uniqueNormalized(labels)
+	if len(cats) == 0 {
+		return nil, fmt.Errorf("カテゴリが見つかりません (%s)", filepath.Clean(path))
+	}
+	return cats, nil
+}
+
 func parseCategoryText(s string) []string {
 	fields := strings.FieldsFunc(s, func(r rune) bool {
 		switch r {
@@ -1418,7 +1467,9 @@ func parseCategoryText(s string) []string {
 
 func main() {
 	cfg := defaultConfig()
+	cfg = applyEnvOverrides(cfg)
 	ensureDirs(cfg.CacheDir)
+	ensureSeedFile(cfg.SeedFile, defaultUserCategories)
 
 	svc, err := NewService(cfg)
 	if err != nil {
@@ -1438,4 +1489,29 @@ func ensureDirs(p string) {
 		return
 	}
 	_ = os.MkdirAll(filepath.Clean(p), 0o755)
+}
+
+func ensureSeedFile(path string, seeds []string) {
+	clean := strings.TrimSpace(path)
+	if clean == "" {
+		return
+	}
+	clean = filepath.Clean(clean)
+	if _, err := os.Stat(clean); err == nil {
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		fmt.Println("カテゴリファイル確認エラー:", err)
+		return
+	}
+	dir := filepath.Dir(clean)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Println("カテゴリファイルディレクトリ作成エラー:", err)
+			return
+		}
+	}
+	content := strings.Join(seeds, "\n")
+	if err := os.WriteFile(clean, []byte(content+"\n"), 0o644); err != nil {
+		fmt.Println("カテゴリファイル作成エラー:", err)
+	}
 }
