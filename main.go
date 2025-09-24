@@ -40,23 +40,51 @@ func main() {
 	inputBodyColumn := flag.String("input-body-column", "", "Column name or #index for the presentation body/summary column")
 	inputTextColumn := flag.String("input-text-column", "", "Column name or #index for the fallback text column")
 	categoryColumn := flag.String("category-column", "", "Column name or #index for category labels")
+	debugSeedCLI := flag.Bool("debug-seed-cli", false, "Run the seed loading/debug pipeline on the CLI")
+	debugSeedFile := flag.String("debug-seed-file", "", "Seed file (.txt/.csv/.tsv) to load during debug CLI mode")
+	debugSeedText := flag.String("debug-seed-text", "", "Raw seed list (comma/newline separated) to load during debug CLI mode")
+	debugSeedOutput := flag.String("debug-seed-output", "", "Path to write normalized seeds during debug CLI mode")
+	debugTextFile := flag.String("debug-text-file", "", "Input file to classify during debug CLI mode")
+	debugDisableNDC := flag.Bool("debug-disable-ndc", false, "Disable NDC dictionary loading while running debug CLI mode")
+	debugSaveResults := flag.Bool("debug-save-results", false, "Write classification CSV output when running debug CLI mode")
 	flag.Parse()
 
-	if *batchInput != "" {
-		inputOpts := categorizer.InputParseOptions{
-			IndexColumn: strings.TrimSpace(*inputIndexColumn),
-			TitleColumn: strings.TrimSpace(*inputTitleColumn),
-			BodyColumn:  strings.TrimSpace(*inputBodyColumn),
-			TextColumn:  strings.TrimSpace(*inputTextColumn),
-		}
+	inputOpts := categorizer.InputParseOptions{
+		IndexColumn: strings.TrimSpace(*inputIndexColumn),
+		TitleColumn: strings.TrimSpace(*inputTitleColumn),
+		BodyColumn:  strings.TrimSpace(*inputBodyColumn),
+		TextColumn:  strings.TrimSpace(*inputTextColumn),
+	}
+	catColumn := strings.TrimSpace(*categoryColumn)
+
+	if strings.TrimSpace(*batchInput) != "" {
 		if err := runBatchMode(
-			*batchInput,
-			*batchCategories,
-			*batchOutputDir,
+			strings.TrimSpace(*batchInput),
+			strings.TrimSpace(*batchCategories),
+			strings.TrimSpace(*batchOutputDir),
 			inputOpts,
-			strings.TrimSpace(*categoryColumn),
+			catColumn,
 		); err != nil {
 			log.Fatalf("batch mode: %v", err)
+		}
+		return
+	}
+
+	debugRequested := *debugSeedCLI || strings.TrimSpace(*debugSeedFile) != "" || strings.TrimSpace(*debugSeedText) != "" || strings.TrimSpace(*debugSeedOutput) != "" || strings.TrimSpace(*debugTextFile) != "" || *debugDisableNDC || *debugSaveResults
+	if debugRequested {
+		opts := seedDebugOptions{
+			seedFile:       strings.TrimSpace(*debugSeedFile),
+			seedText:       *debugSeedText,
+			seedOutput:     strings.TrimSpace(*debugSeedOutput),
+			textFile:       strings.TrimSpace(*debugTextFile),
+			disableNDC:     *debugDisableNDC,
+			inputOpts:      inputOpts,
+			categoryColumn: catColumn,
+			outputDir:      strings.TrimSpace(*batchOutputDir),
+			saveResults:    *debugSaveResults,
+		}
+		if err := runSeedDebug(opts); err != nil {
+			log.Fatalf("debug CLI: %v", err)
 		}
 		return
 	}
@@ -113,6 +141,192 @@ func runBatchMode(inputPath, categoriesPath, outputDir string, inputOpts categor
 		return err
 	}
 	fmt.Printf("分類結果を %s に保存しました\n", outputPath)
+	return nil
+}
+
+type seedDebugOptions struct {
+	seedFile       string
+	seedText       string
+	seedOutput     string
+	textFile       string
+	disableNDC     bool
+	inputOpts      categorizer.InputParseOptions
+	categoryColumn string
+	outputDir      string
+	saveResults    bool
+}
+
+func runSeedDebug(opts seedDebugOptions) error {
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	originalPrefix := log.Prefix()
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.LstdFlags)
+	log.SetPrefix("")
+	defer func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+		log.SetPrefix(originalPrefix)
+	}()
+
+	cfg, err := categorizer.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if opts.disableNDC && cfg.UseNDC {
+		log.Printf("debug CLI: disabling NDC dictionary (config.UseNDC was true)")
+		cfg.UseNDC = false
+	}
+	logger := log.New(os.Stdout, "[service] ", log.LstdFlags)
+
+	embedder, err := categorizer.NewOrtEmbedder(cfg.Embedder)
+	if err != nil {
+		return fmt.Errorf("init embedder: %w", err)
+	}
+	defer embedder.Close()
+
+	ctx := context.Background()
+	service, err := categorizer.NewService(ctx, embedder, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("init service: %w", err)
+	}
+	defer service.Close()
+
+	seeds, source, err := resolveDebugSeeds(opts, cfg)
+	if err != nil {
+		return fmt.Errorf("prepare seeds: %w", err)
+	}
+	log.Printf("debug CLI: loading %d seeds from %s", len(seeds), source)
+	for i, seed := range seeds {
+		log.Printf("debug CLI: seedInput[%d]=%q", i, seed)
+	}
+	if err := service.LoadSeeds(ctx, seeds); err != nil {
+		return fmt.Errorf("load seeds: %w", err)
+	}
+	normalized := service.SeedLabels()
+	log.Printf("debug CLI: service normalized %d seeds", len(normalized))
+	for i, label := range normalized {
+		log.Printf("debug CLI: normalized[%d]=%q", i, label)
+	}
+	if opts.seedOutput != "" {
+		if err := writeSeedFile(opts.seedOutput, normalized); err != nil {
+			return fmt.Errorf("write seed output: %w", err)
+		}
+		log.Printf("debug CLI: wrote %d normalized seeds to %s", len(normalized), opts.seedOutput)
+	}
+
+	if strings.TrimSpace(opts.textFile) == "" {
+		log.Printf("debug CLI: no --debug-text-file provided; skipping classification")
+		return nil
+	}
+
+	log.Printf("debug CLI: reading classification inputs from %s", opts.textFile)
+	records, err := categorizer.ParseInputRecordsWithOptions(opts.textFile, opts.inputOpts)
+	if err != nil {
+		return fmt.Errorf("read input records: %w", err)
+	}
+	log.Printf("debug CLI: parsed %d input records", len(records))
+	if len(records) == 0 {
+		return errors.New("no input records to classify")
+	}
+	rows, err := classifyRecords(ctx, service, records)
+	if err != nil {
+		return fmt.Errorf("classify records: %w", err)
+	}
+	for i, row := range rows {
+		if best, ok := pickBestSuggestion(row); ok {
+			log.Printf("debug CLI: result[%d] best=%q score=%.3f source=%s", i, best.Label, best.Score, best.Source)
+		} else {
+			log.Printf("debug CLI: result[%d] had no suggestions", i)
+		}
+	}
+	if opts.saveResults {
+		outputPath, err := saveResultsCSV(opts.outputDir, records, rows)
+		if err != nil {
+			return fmt.Errorf("save results: %w", err)
+		}
+		log.Printf("debug CLI: wrote classification CSV to %s", outputPath)
+	} else {
+		log.Printf("debug CLI: skipping CSV export (pass --debug-save-results to enable)")
+	}
+	return nil
+}
+
+func resolveDebugSeeds(opts seedDebugOptions, cfg categorizer.Config) ([]string, string, error) {
+	if trimmed := strings.TrimSpace(opts.seedText); trimmed != "" {
+		seeds := categorizer.ParseSeeds(opts.seedText)
+		return seeds, "--debug-seed-text", nil
+	}
+	path := strings.TrimSpace(opts.seedFile)
+	source := "--debug-seed-file"
+	if path == "" {
+		path = strings.TrimSpace(cfg.SeedsPath)
+		source = fmt.Sprintf("config.SeedsPath=%s", path)
+	}
+	if path == "" {
+		return nil, "", errors.New("no seed source provided (set --debug-seed-text, --debug-seed-file, or config.seedsPath)")
+	}
+	seeds, err := loadSeedsFromPath(path, opts.categoryColumn)
+	if err != nil {
+		return nil, path, err
+	}
+	if source == "--debug-seed-file" {
+		source = path
+	}
+	return seeds, source, nil
+}
+
+func loadSeedsFromPath(path, column string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("seed path %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("seed path %s is a directory", path)
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".csv", ".tsv":
+		log.Printf("debug CLI: reading seed categories from %s (column hint=%q)", path, column)
+		metadata, err := categorizer.ReadCategoryFileMetadata(path)
+		if err != nil {
+			return nil, fmt.Errorf("read category metadata: %w", err)
+		}
+		if len(metadata.Columns) > 0 {
+			log.Printf("debug CLI: category columns: %v (suggested=%q)", metadata.Columns, metadata.Suggested)
+		} else {
+			log.Printf("debug CLI: category file has no header row; automatic detection will be used")
+		}
+		seeds, err := categorizer.ParseCategoryListWithOptions(path, categorizer.CategoryParseOptions{Column: column})
+		if err != nil {
+			return nil, fmt.Errorf("parse category list: %w", err)
+		}
+		return seeds, nil
+	default:
+		log.Printf("debug CLI: reading seed list from %s", path)
+		seeds, err := categorizer.ParseSeedFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("parse seed file: %w", err)
+		}
+		return seeds, nil
+	}
+}
+
+func writeSeedFile(path string, seeds []string) error {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return errors.New("seed output path is empty")
+	}
+	dir := filepath.Dir(target)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create seed output directory: %w", err)
+		}
+	}
+	content := strings.Join(seeds, "\n")
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write seed output: %w", err)
+	}
 	return nil
 }
 

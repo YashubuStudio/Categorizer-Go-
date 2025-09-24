@@ -78,6 +78,32 @@ Categorizer は、ユーザーが指定したカテゴリシードと日本十�
 7. **設定の調整**
    - 画面右側の設定パネルでモードや閾値を調整すると、即座にサービスへ反映され `config.json` に保存されます。【F:main.go†L241-L342】
 
+### CLI での一括分類
+- GUI を使わずに分類を完結させたい場合は、`--batch-input` と `--category-file` を指定して CLI モードで起動します。【F:main.go†L60-L145】
+- 入力ファイルの列名が標準の `text` や `body` 以外の場合は、`--input-text-column` や `--input-body-column` などのオプションで列を明示すると確実です。【F:main.go†L32-L47】【F:categorizer/io.go†L34-L109】
+- 実行例:
+  ```bash
+  go run . \
+    --batch-input ./inputs.tsv \
+    --category-file ./seeds.csv \
+    --input-text-column "#3" \
+    --output-dir ./csv
+  ```
+- 分類が完了すると `分類結果を <出力パス> に保存しました` が表示され、結果 CSV が `--output-dir`（未指定時は `csv/`）に生成されます。【F:main.go†L139-L144】
+
+## CLI デバッグモード
+- GUI を経由せずにシードの読み込みやテキスト分類を一通り再現したい場合は、`--debug-` 系フラグを付けて CLI モードを起動できます。【F:main.go†L36-L104】【F:main.go†L126-L229】
+- 例: シード CSV を読み込み、正規化済みシードを `seeds_normalized.txt` に書き出した上でテキストファイルを分類し、ログをすべて標準出力に流すには次のコマンドを実行します。
+  ```bash
+  go run . --debug-seed-cli \
+    --debug-seed-file ./seeds.csv \
+    --debug-text-file ./inputs.tsv \
+    --debug-save-results \
+    --debug-seed-output ./seeds_normalized.txt
+  ```
+- `--debug-seed-text` を指定すると CLI から直接入力したシード文字列を利用できます。`--debug-disable-ndc` で NDC 辞書のロードを抑止し、`--output-dir` は `--debug-save-results` と併用したときの CSV 出力先になります。【F:main.go†L36-L104】【F:main.go†L126-L229】
+- デバッグ実行中はサービスが取り込んだ正規化済みシード一覧もログへ出力されるため、GUI フリーズ時にどこまで処理が進んでいるかを CLI で追跡できます。【F:main.go†L155-L196】【F:categorizer/service.go†L92-L134】
+
 ## 設定項目の詳細
 - **Mode** (`seeded` / `mixed` / `split`): シードのみ、シード+NDC 混合、シードと NDC を別リストで提示するモードを選択します。【F:categorizer/types.go†L5-L23】【F:main.go†L241-L254】
 - **Top-K**: 候補数。スライダで 3〜5 の範囲を指定します。【F:main.go†L649-L668】

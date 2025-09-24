@@ -61,6 +61,21 @@ func (idx *InMemoryIndex) Size() int {
 	return len(idx.items)
 }
 
+// Items returns a defensive copy of the stored items for inspection/debugging.
+func (idx *InMemoryIndex) Items() []VectorItem {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	out := make([]VectorItem, len(idx.items))
+	for i, it := range idx.items {
+		out[i] = VectorItem{
+			Label:  it.Label,
+			Source: it.Source,
+			Vector: cloneVector(it.Vector),
+		}
+	}
+	return out
+}
+
 // Search performs cosine similarity against all stored items and returns the top-k hits.
 func (idx *InMemoryIndex) Search(vec []float32, k int) []Hit {
 	idx.mu.RLock()
