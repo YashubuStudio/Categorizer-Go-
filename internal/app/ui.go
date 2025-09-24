@@ -490,7 +490,13 @@ func (u *uiState) onExport() {
 					fmt.Sprintf("ndc_score%d", i+1))
 			}
 		}
-		header = append(header, "need_review")
+		for i := 0; i < cfg.TopK; i++ {
+			header = append(header,
+				fmt.Sprintf("final_suggestion%d", i+1),
+				fmt.Sprintf("final_score%d", i+1),
+				fmt.Sprintf("final_source%d", i+1))
+		}
+		header = append(header, "final_need_review", "need_review")
 		_ = w.Write(header)
 		for _, r := range u.rows {
 			record := []string{r.Text}
@@ -510,11 +516,18 @@ func (u *uiState) onExport() {
 					}
 				}
 			}
-			if r.NeedReview {
-				record = append(record, "yes")
-			} else {
-				record = append(record, "no")
+			for i := 0; i < cfg.TopK; i++ {
+				if sug, ok := suggestionAt(r.SeedSuggestions, i); ok {
+					record = append(record, suggestionLabel(sug), fmt.Sprintf("%.3f", sug.Score), sug.Source)
+				} else {
+					record = append(record, "", "", "")
+				}
 			}
+			review := "no"
+			if r.NeedReview {
+				review = "yes"
+			}
+			record = append(record, review, review)
 			_ = w.Write(record)
 		}
 		w.Flush()
