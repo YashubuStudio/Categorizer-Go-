@@ -28,6 +28,14 @@ type ResultRow struct {
 	NDCSuggestions []Suggestion `json:"ndcSuggestions,omitempty"`
 }
 
+// InputRecord represents a text sample optionally accompanied by metadata.
+type InputRecord struct {
+	Index string `json:"index,omitempty"`
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
+	Text  string `json:"text"`
+}
+
 // ClusterConfig controls optional clustering of similar categories.
 type ClusterConfig struct {
 	Enabled   bool    `json:"enabled"`
