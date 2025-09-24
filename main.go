@@ -47,7 +47,6 @@ const (
 	ModeSplit  = "split"
 
 	fyneAppID       = "studio.yashubu.categorizer"
-	seedFileEnvVar  = "CATEGORIZER_SEED_FILE"
 	defaultSeedFile = "config/categories_seed.txt"
 )
 
@@ -149,13 +148,6 @@ func sanitizeConfig(cfg Config) Config {
 		cfg.Thresh.Mean = 0.50
 	}
 	cfg.SeedFile = strings.TrimSpace(cfg.SeedFile)
-	return cfg
-}
-
-func applyEnvOverrides(cfg Config) Config {
-	if v := strings.TrimSpace(os.Getenv(seedFileEnvVar)); v != "" {
-		cfg.SeedFile = v
-	}
 	return cfg
 }
 
