@@ -172,14 +172,18 @@ func runGUIMode() {
 	applySeeds := func(seeds []string) {
 		seedStatus.SetText("シード更新中...")
 		list := append([]string(nil), seeds...)
+		logger.Printf("シード更新リクエスト: %d件", len(list))
 		go func(items []string) {
+			start := time.Now()
 			if err := service.LoadSeeds(ctx, items); err != nil {
+				logger.Printf("シード更新失敗 (%d件, 所要時間: %s): %v", len(items), time.Since(start), err)
 				fyne.Do(func() {
 					seedStatus.SetText("シード更新失敗")
 					showError(win, fmt.Errorf("シードの読み込みに失敗しました: %w", err))
 				})
 				return
 			}
+			logger.Printf("シード更新完了: 登録=%d件, 所要時間: %s", service.SeedCount(), time.Since(start))
 			fyne.Do(func() {
 				seedStatus.SetText(fmt.Sprintf("シード数: %d", service.SeedCount()))
 			})
@@ -366,10 +370,13 @@ func runGUIMode() {
 		classifyBtn.Disable()
 		statusLabel.SetText("推論中...")
 		localRecords := append([]categorizer.InputRecord(nil), records...)
-		go func(samples []categorizer.InputRecord) {
+		fromPending := usePendingRecords && len(pendingRecords) > 0
+		logger.Printf("分類ジョブ開始: %d件 (pendingRecords=%t)", len(localRecords), fromPending)
+		go func(samples []categorizer.InputRecord, pending bool) {
 			start := time.Now()
 			rows, err := classifyRecords(ctx, service, samples)
 			if err != nil {
+				logger.Printf("分類ジョブ失敗: %d件 (pendingRecords=%t, 所要時間=%s): %v", len(samples), pending, time.Since(start), err)
 				fyne.Do(func() {
 					classifyBtn.Enable()
 					statusLabel.SetText("エラーが発生しました")
@@ -377,12 +384,13 @@ func runGUIMode() {
 				})
 				return
 			}
+			logger.Printf("分類ジョブ完了: %d件 (pendingRecords=%t, 所要時間=%s)", len(rows), pending, time.Since(start))
 			updateResults(samples, rows)
 			fyne.Do(func() {
 				classifyBtn.Enable()
 				statusLabel.SetText(fmt.Sprintf("%d件 %.2fs", len(rows), time.Since(start).Seconds()))
 			})
-		}(localRecords)
+		}(localRecords, fromPending)
 	}
 
 	classifyBtn = widget.NewButton("分類実行", func() {
@@ -432,6 +440,7 @@ func runGUIMode() {
 					statusLabel.SetText("入力が空です")
 					return
 				}
+				logger.Printf("テキスト読込: %s (%d件)", filepath.Base(path), len(records))
 				preview := buildPreviewText(records)
 				ignoreTextChange = true
 				textInput.SetText(preview)
@@ -536,6 +545,7 @@ func runGUIMode() {
 					fyne.Do(func() {
 						statusLabel.SetText("発表CSV/TSVを選択してください")
 					})
+					logger.Printf("バッチ分類: カテゴリファイル %s (%d件) 読込完了", filepath.Base(catPath), len(categories))
 					fyne.Do(func() {
 						recDialog := dialog.NewFileOpen(func(recRC fyne.URIReadCloser, err error) {
 							if err != nil {
@@ -589,9 +599,11 @@ func runGUIMode() {
 										})
 										return
 									}
+									logger.Printf("バッチ分類: 入力ファイル %s (%d件) 読込完了", filepath.Base(recPath), len(records))
 									start := time.Now()
 									rows, err := classifyRecords(ctx, service, records)
 									if err != nil {
+										logger.Printf("バッチ分類: 分類エラー (%s, 件数=%d, 所要時間=%s): %v", filepath.Base(recPath), len(records), time.Since(start), err)
 										fyne.Do(func() {
 											statusLabel.SetText("分類エラー")
 											showError(win, err)
@@ -600,12 +612,14 @@ func runGUIMode() {
 									}
 									outputPath, err := saveResultsCSV("csv", records, rows)
 									if err != nil {
+										logger.Printf("バッチ分類: 保存エラー (%s): %v", filepath.Base(recPath), err)
 										fyne.Do(func() {
 											statusLabel.SetText("保存エラー")
 											showError(win, err)
 										})
 										return
 									}
+									logger.Printf("バッチ分類完了: 件数=%d, 所要時間=%s, 出力=%s", len(rows), time.Since(start), outputPath)
 									preview := buildPreviewText(records)
 									updateResults(records, rows)
 									fyne.Do(func() {
