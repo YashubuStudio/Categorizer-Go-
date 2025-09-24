@@ -250,6 +250,49 @@ func runGUIMode() {
 		fd.Show()
 	})
 
+	seedCreateBtn := widget.NewButton("シード作成", func() {
+		seeds := categorizer.ParseSeeds(seedInput.Text)
+		if len(seeds) == 0 {
+			showError(win, fmt.Errorf("シードが入力されていません"))
+			return
+		}
+		fd := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+			if err != nil {
+				showError(win, err)
+				return
+			}
+			if wc == nil {
+				return
+			}
+			defer wc.Close()
+			content := strings.Join(seeds, "\n")
+			if _, err := wc.Write([]byte(content)); err != nil {
+				showError(win, fmt.Errorf("シードファイルの保存に失敗しました: %w", err))
+				return
+			}
+			path := wc.URI().Path()
+			if path == "" {
+				path = wc.URI().String()
+			}
+			seedInput.SetText(content)
+			cfgMu.Lock()
+			cfg.SeedsPath = path
+			cfgMu.Unlock()
+			saveConfig()
+			logger.Printf("シードファイル保存: %s (%d件)", filepath.Base(path), len(seeds))
+			applySeeds(seeds)
+		}, win)
+		fileName := "seeds.txt"
+		cfgMu.Lock()
+		if cfg.SeedsPath != "" {
+			fileName = filepath.Base(cfg.SeedsPath)
+		}
+		cfgMu.Unlock()
+		fd.SetFileName(fileName)
+		fd.SetFilter(storageFilter([]string{".txt", ".csv", ".tsv"}))
+		fd.Show()
+	})
+
 	if cfg.SeedsPath != "" {
 		if seeds, err := categorizer.ParseCategoryListWithOptions(cfg.SeedsPath, categorizer.CategoryParseOptions{}); err == nil {
 			seedInput.SetText(strings.Join(seeds, "\n"))
@@ -773,7 +816,7 @@ func runGUIMode() {
 		widget.NewSeparator(),
 		widget.NewLabel("シードカテゴリ"),
 		seedInput,
-		container.NewHBox(loadSeedsBtn, loadSeedsFileBtn, seedStatus),
+		container.NewHBox(loadSeedsBtn, loadSeedsFileBtn, seedCreateBtn, seedStatus),
 		widget.NewSeparator(),
 		widget.NewLabel("設定"),
 		modeSelect,
