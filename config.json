@@ -1,0 +1,20 @@
+{
+  "mode": "mixed",
+  "topK": 3,
+  "seedBias": 0.03,
+  "minScore": 0.35,
+  "cluster": {
+    "enabled": false,
+    "threshold": 0.8
+  },
+  "embedder": {
+    "ortDll": "./onnixruntime-win/lib/onnxruntime.dll",
+    "modelPath": "./models/bge-m3/model.onnx",
+    "tokenizerPath": "./models/bge-m3/tokenizer.json",
+    "maxSeqLen": 512,
+    "cacheDir": "./cache",
+    "modelId": "bge-m3"
+  },
+  "seedsPath": "./seeds.txt",
+  "useNdc": true
+}
