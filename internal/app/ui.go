@@ -21,8 +21,17 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+// 変更点の要旨:
+// - レイアウトを AppTabs(入力/結果/アクティビティ) に再編して視認性を向上。
+// - 上部にツールバー(クイックアクション)を配置、主要操作を一列で集約。
+// - 結果タブにフィルタ(インクリメンタル検索)を追加。機能は非破壊で、表示のみ絞り込み。
+// - ログ/進捗/設定サマリを「アクティビティ」タブに集約し、情報の見通しを改善。
+// - 余白/行高/オフセットを見直し、可読性を改善。
+// - 既存の処理系(分類/エクスポート/設定/読込/カテゴリ読込)はそのまま利用。
+
 const logDebounceInterval = 150 * time.Millisecond
 
+// --- 既存構造体に小改良: 表示用のフィルタ行列を追加 ---
 type tableColumn struct {
 	Title  string
 	Width  float32
@@ -33,22 +42,35 @@ type uiState struct {
 	service *Service
 	cfg     Config
 
-	w             fyne.Window
-	input         *widget.Entry
+	w fyne.Window
+
+	// 入力
+	input *widget.Entry
+
+	// ログ/進捗など
 	log           *widget.Entry
 	status        *widget.Label
 	progress      *widget.ProgressBar
 	configSummary *widget.Label
-	resTbl        *widget.Table
-	columns       []tableColumn
-	rows          []ResultRow
-	statusBind    binding.String
-	logBind       binding.String
-	progressBind  binding.Float
-	logLines      []string
-	logMu         sync.Mutex
-	logUpdateCh   chan struct{}
 
+	// 結果
+	resTbl    *widget.Table
+	columns   []tableColumn
+	rows      []ResultRow
+	viewRows  []ResultRow // フィルタ後の表示用
+	filterEnt *widget.Entry
+
+	// データバインド
+	statusBind   binding.String
+	logBind      binding.String
+	progressBind binding.Float
+
+	// ログ更新バッファ
+	logLines    []string
+	logMu       sync.Mutex
+	logUpdateCh chan struct{}
+
+	// 操作ボタン
 	classifyBtn *widget.Button
 	exportBtn   *widget.Button
 	loadBtn     *widget.Button
@@ -60,32 +82,42 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 	u.cfg = svc.Config()
 	u.w = a.NewWindow("Vector Categorizer - Seeded & NDC")
 
+	// バインド
 	u.statusBind = binding.NewString()
 	_ = u.statusBind.Set("準備完了")
 	u.progressBind = binding.NewFloat()
 	u.logBind = binding.NewString()
 	u.startLogUpdater()
 
+	// 入力エリア
 	u.input = widget.NewMultiLineEntry()
 	u.input.SetPlaceHolder("ここに文章を入力（1行=1件）")
 
+	// ログ
 	u.log = widget.NewEntryWithData(u.logBind)
 	u.log.MultiLine = true
 	u.log.Wrapping = fyne.TextWrapWord
 	u.log.SetPlaceHolder("処理ログ")
 	u.log.Disable()
 
+	// ステータス/進捗
 	u.status = widget.NewLabelWithData(u.statusBind)
 	u.progress = widget.NewProgressBarWithData(u.progressBind)
 	u.progress.Hide()
 	u.configSummary = widget.NewLabel("")
 
+	// 操作ボタン
 	u.classifyBtn = widget.NewButtonWithIcon("分類実行", theme.ConfirmIcon(), func() { u.onClassify() })
+
 	u.exportBtn = widget.NewButtonWithIcon("CSVエクスポート", theme.DocumentSaveIcon(), func() { u.onExport() })
+
 	u.loadBtn = widget.NewButtonWithIcon("ファイル読込", theme.FolderOpenIcon(), func() { u.onLoadFile() })
+
 	settingsBtn := widget.NewButtonWithIcon("設定", theme.SettingsIcon(), func() { u.openSettings() })
+
 	u.catBtn = widget.NewButtonWithIcon("カテゴリ読込", theme.ContentAddIcon(), func() { u.onLoadCategories() })
 
+	// テーブル生成
 	u.columns = u.makeColumns(u.cfg)
 	u.resTbl = widget.NewTable(
 		func() (int, int) {
@@ -93,7 +125,7 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 			if cols == 0 {
 				cols = 1
 			}
-			return len(u.rows) + 1, cols
+			return len(u.viewRows) + 1, cols
 		},
 		func() fyne.CanvasObject {
 			lbl := widget.NewLabel("")
@@ -117,7 +149,7 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 			lbl.Alignment = fyne.TextAlignLeading
 			lbl.Wrapping = fyne.TextWrapWord
 			rowIdx := id.Row - 1
-			if rowIdx >= len(u.rows) {
+			if rowIdx >= len(u.viewRows) {
 				lbl.SetText("")
 				return
 			}
@@ -125,7 +157,7 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 				lbl.SetText("")
 				return
 			}
-			val := u.columns[id.Col].Render(u.rows[rowIdx])
+			val := u.columns[id.Col].Render(u.viewRows[rowIdx])
 			lbl.SetText(val)
 			if id.Col == 0 {
 				width := u.columns[id.Col].Width
@@ -139,35 +171,57 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 	)
 	u.applyColumnWidths()
 
-	controlRow1 := container.NewGridWithColumns(3, u.classifyBtn, u.exportBtn, settingsBtn)
-	controlRow2 := container.NewGridWithColumns(2, u.loadBtn, u.catBtn)
-	left := container.NewVBox(
-		widget.NewLabelWithStyle("入力テキスト", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewMax(u.input),
-		controlRow1,
-		controlRow2,
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("進捗", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+	// --- UI: 上部ツールバー ---
+	toolbar := container.NewGridWithColumns(5, u.classifyBtn, u.loadBtn, u.catBtn, u.exportBtn, settingsBtn)
+
+	// --- 入力タブ ---
+	inputHeader := widget.NewLabelWithStyle("入力テキスト", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	inputPane := container.NewBorder(nil, nil, nil, nil, container.NewMax(u.input))
+	inputTab := container.NewBorder(inputHeader, nil, nil, nil, inputPane)
+
+	// --- 結果タブ: フィルタを追加 ---
+	u.filterEnt = widget.NewEntry()
+	u.filterEnt.SetPlaceHolder("結果をフィルタ (本文/候補/ソースに含まれる語)")
+	u.filterEnt.OnChanged = func(s string) { u.applyFilter(strings.TrimSpace(s)) }
+	filterBar := container.NewGridWithColumns(2, widget.NewLabel("フィルタ"), u.filterEnt)
+	resultsTab := container.NewBorder(filterBar, nil, nil, nil, container.NewMax(u.resTbl))
+
+	// --- アクティビティタブ: 進捗/ステータス/設定サマリ/ログ ---
+	progHeader := widget.NewLabelWithStyle("進捗", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	cfgHeader := widget.NewLabelWithStyle("設定サマリ", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	logHeader := widget.NewLabelWithStyle("ログ", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	activity := container.NewVBox(
+		progHeader,
 		u.progress,
 		u.status,
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("設定サマリ", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		cfgHeader,
 		u.configSummary,
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("ログ", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		logHeader,
 		container.NewMax(u.log),
 	)
 
-	right := container.NewBorder(nil, nil, nil, nil, u.resTbl)
-	split := container.NewHSplit(left, right)
-	split.Offset = 0.35
+	// --- AppTabs で3分割 ---
+	tabs := container.NewAppTabs(
+		container.NewTabItemWithIcon("入力", theme.DocumentCreateIcon(), inputTab),
+		container.NewTabItemWithIcon("結果", theme.ListIcon(), resultsTab),
+		container.NewTabItemWithIcon("アクティビティ", theme.InfoIcon(), activity),
+	)
+	tabs.SetTabLocation(container.TabLocationTop)
 
-	u.w.SetContent(split)
-	u.w.Resize(fyne.NewSize(1180, 760))
+	// 配置: 上にツールバー、下にタブ
+	root := container.NewBorder(toolbar, nil, nil, nil, tabs)
+
+	u.w.SetContent(root)
+	u.w.Resize(fyne.NewSize(1180, 780))
 	u.updateConfigSummary()
+	// 初期はフィルタなしで viewRows = rows
+	u.viewRows = u.rows
 	return u
 }
 
+// 列定義は既存ロジックを流用
 func (u *uiState) makeColumns(cfg Config) []tableColumn {
 	cols := []tableColumn{
 		{Title: "本文", Width: 360, Render: func(r ResultRow) string { return r.Text }},
@@ -222,6 +276,7 @@ func (u *uiState) rebuildTableColumns(cfg Config) {
 	u.resTbl.Refresh()
 }
 
+// --- Busy制御(ツールバーの主要ボタンを集中的に制御) ---
 func (u *uiState) setBusy(b bool) {
 	fyne.Do(func() {
 		if b {
@@ -238,6 +293,7 @@ func (u *uiState) setBusy(b bool) {
 	})
 }
 
+// --- ログ: バッファ+デバウンスは既存を踏襲 ---
 func (u *uiState) appendLog(msg string) {
 	now := time.Now().Format("15:04:05")
 	line := fmt.Sprintf("[%s] %s", now, msg)
@@ -295,32 +351,54 @@ func (u *uiState) flushLog() {
 	_ = u.logBind.Set(text)
 }
 
-func (u *uiState) setStatus(text string) {
-	_ = u.statusBind.Set(text)
+// --- 表示用フィルタ ---
+func (u *uiState) applyFilter(q string) {
+	if q == "" {
+		u.viewRows = u.rows
+		u.resTbl.Refresh()
+		return
+	}
+	qLower := strings.ToLower(q)
+	filtered := make([]ResultRow, 0, len(u.rows))
+	for _, r := range u.rows {
+		if strings.Contains(strings.ToLower(r.Text), qLower) {
+			filtered = append(filtered, r)
+			continue
+		}
+		// 候補
+		match := false
+		for _, s := range r.Suggestions {
+			if strings.Contains(strings.ToLower(suggestionLabel(s)), qLower) ||
+				strings.Contains(strings.ToLower(s.Source), qLower) {
+				match = true
+				break
+			}
+		}
+		if !match {
+			for _, s := range r.NDCSuggestions {
+				if strings.Contains(strings.ToLower(suggestionLabel(s)), qLower) {
+					match = true
+					break
+				}
+			}
+		}
+		if match {
+			filtered = append(filtered, r)
+		}
+	}
+	u.viewRows = filtered
+	u.resTbl.Refresh()
 }
+
+// --- ステータス/進捗 ---
+func (u *uiState) setStatus(text string) { _ = u.statusBind.Set(text) }
 
 func (u *uiState) configureProgress(min, max float64) {
-	fyne.Do(func() {
-		u.progress.Min = min
-		u.progress.Max = max
-	})
+	fyne.Do(func() { u.progress.Min = min; u.progress.Max = max })
 }
-
-func (u *uiState) setProgressValue(value float64) {
-	_ = u.progressBind.Set(value)
-}
-
-func (u *uiState) showProgress() {
-	fyne.Do(func() {
-		u.progress.Show()
-	})
-}
-
-func (u *uiState) hideProgress() {
-	fyne.Do(func() {
-		u.progress.Hide()
-	})
-}
+func (u *uiState) setProgressValue(value float64) { _ = u.progressBind.Set(value) }
+func (u *uiState) showProgress()                  { fyne.Do(func() { u.progress.Show() }) }
+func (u *uiState) hideProgress()                  { fyne.Do(func() { u.progress.Hide() }) }
 
 func (u *uiState) updateConfigSummary() {
 	cfg := u.cfg
@@ -345,6 +423,7 @@ func (u *uiState) updateConfigSummary() {
 	u.configSummary.SetText(summary)
 }
 
+// --- アクション: 既存ロジックを踏襲しつつ viewRows を更新 ---
 func (u *uiState) onClassify() {
 	lines := splitNonEmptyLines(u.input.Text)
 	if len(lines) == 0 {
@@ -369,16 +448,14 @@ func (u *uiState) onClassify() {
 		u.setBusy(false)
 		u.hideProgress()
 		if err != nil {
-			fyne.Do(func() {
-				dialog.ShowError(err, u.w)
-			})
+			fyne.Do(func() { dialog.ShowError(err, u.w) })
 			u.setStatus("エラー")
 			u.appendLog(fmt.Sprintf("エラー: %v", err))
 			return
 		}
 		fyne.Do(func() {
 			u.rows = rows
-			u.resTbl.Refresh()
+			u.applyFilter(strings.TrimSpace(u.filterEnt.Text)) // 現在のフィルタを維持
 		})
 		elapsed := time.Since(start).Seconds()
 		u.setProgressValue(float64(len(rows)))

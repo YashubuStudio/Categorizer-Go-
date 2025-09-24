@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fyne.io/fyne/v2"
 	fyneapp "fyne.io/fyne/v2/app"
 )
 
@@ -16,8 +15,6 @@ func Run() error {
 		return err
 	}
 	defer svc.Close()
-
-	fyne.SetLogLevel(fyne.LogLevelWarning)
 
 	a := fyneapp.NewWithID(fyneAppID)
 	u := buildUI(a, svc)
