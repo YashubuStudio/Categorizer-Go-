@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"sort"
 	"strings"
@@ -157,12 +158,12 @@ func (s *Service) ClassifyAll(ctx context.Context, texts []string) ([]ResultRow,
 }
 
 func (s *Service) rankForVector(vec []float32, originalText string, cfg Config) ResultRow {
-	topK := cfg.TopK
-	if topK <= 0 {
-		topK = 3
+	topK := clampTopK(cfg.TopK)
+	seedHits := applySourceWeight(s.seedsIdx.Search(vec, topK*3), 1)
+	var ndcHits []Hit
+	if cfg.UseNDC {
+		ndcHits = applySourceWeight(s.ndcIdx.Search(vec, topK*3), cfg.WeightNDC)
 	}
-	seedHits := filterHits(s.seedsIdx.Search(vec, topK*3), cfg.MinScore)
-	ndcHits := filterHits(s.ndcIdx.Search(vec, topK*3), cfg.MinScore)
 
 	var suggestions []Suggestion
 	var ndcSuggestions []Suggestion
@@ -172,12 +173,13 @@ func (s *Service) rankForVector(vec []float32, originalText string, cfg Config) 
 		if cfg.Cluster.Enabled {
 			seedHits = clusterHits(seedHits, cfg.Cluster.Threshold)
 		}
-		seedHits = limitHits(seedHits, topK)
-		suggestions = hitsToSuggestions(seedHits)
+		suggestions = hitsToSuggestions(limitHits(seedHits, topK))
 	case ModeSplit:
 		if cfg.Cluster.Enabled {
 			seedHits = clusterHits(seedHits, cfg.Cluster.Threshold)
-			ndcHits = clusterHits(ndcHits, cfg.Cluster.Threshold)
+			if cfg.UseNDC {
+				ndcHits = clusterHits(ndcHits, cfg.Cluster.Threshold)
+			}
 		}
 		suggestions = hitsToSuggestions(limitHits(seedHits, topK))
 		if cfg.UseNDC {
@@ -185,10 +187,7 @@ func (s *Service) rankForVector(vec []float32, originalText string, cfg Config) 
 		}
 	case ModeMixed:
 		weighted := make([]Hit, 0, len(seedHits)+len(ndcHits))
-		for _, h := range seedHits {
-			h.Score += cfg.SeedBias
-			weighted = append(weighted, h)
-		}
+		weighted = append(weighted, seedHits...)
 		if cfg.UseNDC {
 			weighted = append(weighted, ndcHits...)
 		}
@@ -203,7 +202,6 @@ func (s *Service) rankForVector(vec []float32, originalText string, cfg Config) 
 		})
 		suggestions = hitsToSuggestions(limitHits(weighted, topK))
 	default:
-		// Fallback to seeded behaviour if mode unknown.
 		if cfg.Cluster.Enabled {
 			seedHits = clusterHits(seedHits, cfg.Cluster.Threshold)
 		}
@@ -217,24 +215,51 @@ func (s *Service) rankForVector(vec []float32, originalText string, cfg Config) 
 	}
 }
 
-func filterHits(hits []Hit, minScore float32) []Hit {
-	if minScore <= 0 {
-		return hits
-	}
-	out := hits[:0]
-	for _, h := range hits {
-		if h.Score >= minScore {
-			out = append(out, h)
-		}
-	}
-	return out
-}
-
 func limitHits(hits []Hit, k int) []Hit {
 	if len(hits) <= k {
 		return hits
 	}
 	return hits[:k]
+}
+
+const (
+	biasScale    = 1e-6
+	biasDivisor  = float32(1<<32 - 1)
+	maxWeightVal = 1.0
+)
+
+func applySourceWeight(hits []Hit, weight float32) []Hit {
+	if len(hits) == 0 {
+		return hits
+	}
+	if weight < 0 {
+		weight = 0
+	}
+	if weight > maxWeightVal {
+		weight = maxWeightVal
+	}
+	for i := range hits {
+		score := hits[i].Score
+		if score < 0 {
+			score = 0
+		}
+		score *= weight
+		if score > maxWeightVal {
+			score = maxWeightVal
+		}
+		score += tinyBias(hits[i].Label)
+		hits[i].Score = score
+	}
+	return hits
+}
+
+func tinyBias(label string) float32 {
+	if label == "" {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(label))
+	return (float32(h.Sum32()) / biasDivisor) * biasScale
 }
 
 func hitsToSuggestions(hits []Hit) []Suggestion {
