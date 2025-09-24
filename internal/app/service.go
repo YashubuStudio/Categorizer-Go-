@@ -129,21 +129,29 @@ func (s *Service) embedLabelSet(ctx context.Context, labels []string, source str
 	vecs := make(map[string][]float32, len(labels))
 	seen := make(map[string]struct{})
 	for _, raw := range labels {
-		lab := normalize(raw)
-		if lab == "" {
+		display := normalize(raw)
+		if display == "" {
 			continue
 		}
-		if _, ok := seen[lab]; ok {
+		key := normalizeKey(display)
+		if key == "" {
 			continue
 		}
-		seen[lab] = struct{}{}
-		vec, err := s.EmbedCached(ctx, lab)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		embedText := normalizeText(display)
+		if embedText == "" {
+			continue
+		}
+		vec, err := s.EmbedCached(ctx, embedText)
 		if err != nil {
 			return nil, nil, err
 		}
 		vecCopy := append([]float32(nil), vec...)
-		res = append(res, Candidate{Label: lab, Vec: vecCopy, Source: source})
-		vecs[lab] = vecCopy
+		res = append(res, Candidate{Label: display, Key: key, Vec: vecCopy, Source: source})
+		vecs[display] = vecCopy
 	}
 	return res, vecs, nil
 }
@@ -188,7 +196,7 @@ func (s *Service) ClassifyAll(ctx context.Context, texts []string, progress func
 
 func (s *Service) RankOne(ctx context.Context, text string) (ResultRow, error) {
 	row := ResultRow{Text: text}
-	normalized := normalize(text)
+	normalized := normalizeText(text)
 	if normalized == "" {
 		row.NeedReview = true
 		return row, nil
@@ -209,8 +217,13 @@ func (s *Service) RankOne(ctx context.Context, text string) (ResultRow, error) {
 
 	topK := cfg.TopK
 
-	seeds := scoreCandidates(vec, catCands, 1.0, cfg.SeedBias)
-	seeds = truncateSuggestions(seeds, topK)
+	baseScores := computeBaseScores(vec, catCands)
+	hybridAll, ruleBonus, finalScores := applyHybridScoring(normalized, catCands, baseScores, cfg.SeedBias)
+	seeds := truncateSuggestions(hybridAll, topK)
+
+	row.BaseScores = baseScores
+	row.RuleBonus = ruleBonus
+	row.FinalScores = finalScores
 
 	useNDC := (cfg.Mode != ModeSeeded && cfg.UseNDC) || cfg.Mode == ModeSplit
 	ndc := []Suggestion{}
@@ -245,15 +258,15 @@ func (s *Service) RankOne(ctx context.Context, text string) (ResultRow, error) {
 	row.SeedSuggestions = seeds
 	row.NDCSuggestions = ndc
 
-	ref := combined
+	ref := row.SeedSuggestions
 	if len(ref) == 0 {
-		if len(seeds) > 0 {
-			ref = seeds
+		if len(combined) > 0 {
+			ref = combined
 		} else {
 			ref = ndc
 		}
 	}
-	row.NeedReview = needReview(ref, cfg.Thresh)
+	row.NeedReview = needReview(ref, cfg.Thresh.Margin12)
 	return row, nil
 }
 
@@ -275,7 +288,7 @@ func scoreCandidates(q []float32, cands []Candidate, weight, bias float32) []Sug
 		if sc < 0 {
 			sc = 0
 		}
-		sc = sc*weight + bias + tinyBias(c.Label)
+		sc = sc*weight + bias + tinyBias(c.Key)
 		res = append(res, Suggestion{Label: c.Label, Score: clamp01(sc), Source: c.Source})
 	}
 	sort.SliceStable(res, func(i, j int) bool { return res[i].Score > res[j].Score })
@@ -310,17 +323,17 @@ func mergeSuggestions(a, b []Suggestion, topK int) []Suggestion {
 	return out
 }
 
-func needReview(sugs []Suggestion, thresh Threshold) bool {
+func needReview(sugs []Suggestion, tieDelta float32) bool {
 	if len(sugs) == 0 {
 		return true
 	}
-	top1 := sugs[0].Score
-	top2 := float32(0)
-	if len(sugs) > 1 {
-		top2 = sugs[1].Score
+	if len(sugs) < 2 {
+		return false
 	}
-	mean := meanScore(sugs)
-	return top1 < thresh.Top1 || (top1-top2) < thresh.Margin12 || mean < thresh.Mean
+	if tieDelta <= 0 {
+		return false
+	}
+	return (sugs[0].Score - sugs[1].Score) < tieDelta
 }
 
 func meanScore(sugs []Suggestion) float32 {
