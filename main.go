@@ -71,7 +71,6 @@ func runBatchMode(inputPath, categoriesPath, outputDir string, inputOpts categor
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	cfg.TopK = 1
 
 	embedder, err := categorizer.NewOrtEmbedder(cfg.Embedder)
 	if err != nil {
@@ -126,7 +125,6 @@ func runGUIMode() {
 		showFatalError(win, fmt.Errorf("設定の読み込みに失敗しました: %w", err))
 		return
 	}
-	cfg.TopK = 1
 
 	loggerBinding := binding.NewString()
 	logCapture := newLogCapture(loggerBinding, 300)
@@ -648,34 +646,42 @@ func runGUIMode() {
 	})
 	modeSelect.SetSelected(string(cfg.Mode))
 
-	topKLabel := widget.NewLabel("Top-K: 1 (固定)")
-
-	seedBiasSlider := widget.NewSlider(0, 0.2)
-	seedBiasSlider.Step = 0.01
-	seedBiasSlider.SetValue(float64(cfg.SeedBias))
-	seedBiasLabel := widget.NewLabel(fmt.Sprintf("シードバイアス: %.2f", cfg.SeedBias))
-	seedBiasSlider.OnChanged = func(v float64) {
-		seedBiasLabel.SetText(fmt.Sprintf("シードバイアス: %.2f", v))
+	topKLabel := widget.NewLabel(fmt.Sprintf("Top-K: %d", cfg.TopK))
+	topKSlider := widget.NewSlider(3, 5)
+	topKSlider.Step = 1
+	topKSlider.SetValue(float64(cfg.TopK))
+	topKSlider.OnChanged = func(v float64) {
+		val := int(v + 0.5)
+		if val < 3 {
+			val = 3
+		}
+		if val > 5 {
+			val = 5
+		}
+		topKLabel.SetText(fmt.Sprintf("Top-K: %d", val))
 		cfgMu.Lock()
-		cfg.SeedBias = float32(v)
+		cfg.TopK = val
 		localCfg := cfg
 		cfgMu.Unlock()
 		service.UpdateConfig(localCfg)
 		saveConfig()
 	}
 
-	minScoreSlider := widget.NewSlider(0, 1)
-	minScoreSlider.Step = 0.01
-	minScoreSlider.SetValue(float64(cfg.MinScore))
-	minScoreLabel := widget.NewLabel(fmt.Sprintf("最小スコア: %.2f", cfg.MinScore))
-	minScoreSlider.OnChanged = func(v float64) {
-		minScoreLabel.SetText(fmt.Sprintf("最小スコア: %.2f", v))
+	weightNDCLabel := widget.NewLabel(fmt.Sprintf("NDC重み: %.2f", cfg.WeightNDC))
+	weightNDCSlider := widget.NewSlider(0.7, 1.0)
+	weightNDCSlider.Step = 0.01
+	weightNDCSlider.SetValue(float64(cfg.WeightNDC))
+	weightNDCSlider.OnChanged = func(v float64) {
+		weightNDCLabel.SetText(fmt.Sprintf("NDC重み: %.2f", v))
 		cfgMu.Lock()
-		cfg.MinScore = float32(v)
+		cfg.WeightNDC = float32(v)
 		localCfg := cfg
 		cfgMu.Unlock()
 		service.UpdateConfig(localCfg)
 		saveConfig()
+	}
+	if !cfg.UseNDC {
+		weightNDCSlider.Disable()
 	}
 
 	clusterCheck := widget.NewCheck("類似カテゴリを束ねる", nil)
@@ -719,6 +725,11 @@ func runGUIMode() {
 		cfgMu.Unlock()
 		service.UpdateConfig(localCfg)
 		saveConfig()
+		if checked {
+			weightNDCSlider.Enable()
+		} else {
+			weightNDCSlider.Disable()
+		}
 		go func() {
 			if checked {
 				if err := service.LoadNDCDictionary(ctx, categorizer.DefaultNDCEntries()); err != nil {
@@ -752,9 +763,8 @@ func runGUIMode() {
 		widget.NewSeparator(),
 		widget.NewLabel("設定"),
 		modeSelect,
-		topKLabel,
-		container.NewHBox(seedBiasLabel, seedBiasSlider),
-		container.NewHBox(minScoreLabel, minScoreSlider),
+		container.NewHBox(topKLabel, topKSlider),
+		container.NewHBox(weightNDCLabel, weightNDCSlider),
 		container.NewHBox(clusterCheck, clusterLabel, clusterSlider),
 		useNDCCheck,
 		widget.NewSeparator(),
