@@ -1,5 +1,5 @@
 {
-  "mode": "mixed",
+  "mode": "seeded",
   "topK": 3,
   "seedBias": 0.03,
   "minScore": 0.35,
@@ -16,5 +16,5 @@
     "modelId": "bge-m3"
   },
   "seedsPath": "./seeds.txt",
-  "useNdc": true
+  "useNdc": false
 }
