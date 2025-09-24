@@ -22,6 +22,7 @@ func LoadConfig(path string) (Config, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			cfg.UseNDC = true
 			cfg.ApplyDefaults()
+			SetColumnCandidates(cfg.ColumnCandidates)
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read config: %w", err)
@@ -34,6 +35,7 @@ func LoadConfig(path string) (Config, error) {
 		cfg.UseNDC = true
 	}
 	cfg.ApplyDefaults()
+	SetColumnCandidates(cfg.ColumnCandidates)
 	if cfg.Embedder.CacheDir != "" {
 		if err := os.MkdirAll(cfg.Embedder.CacheDir, 0o755); err != nil {
 			return cfg, fmt.Errorf("create cache dir: %w", err)
@@ -52,6 +54,7 @@ func SaveConfig(path string, cfg Config) error {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 	cfg.ApplyDefaults()
+	SetColumnCandidates(cfg.ColumnCandidates)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)

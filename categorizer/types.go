@@ -54,14 +54,15 @@ type EmbedderConfig struct {
 
 // Config aggregates runtime settings persisted to config.json.
 type Config struct {
-	Mode      Mode           `json:"mode"`
-	TopK      int            `json:"topK"`
-	SeedBias  float32        `json:"seedBias"`
-	MinScore  float32        `json:"minScore"`
-	Cluster   ClusterConfig  `json:"cluster"`
-	Embedder  EmbedderConfig `json:"embedder"`
-	SeedsPath string         `json:"seedsPath"`
-	UseNDC    bool           `json:"useNdc"`
+	Mode             Mode             `json:"mode"`
+	TopK             int              `json:"topK"`
+	SeedBias         float32          `json:"seedBias"`
+	MinScore         float32          `json:"minScore"`
+	Cluster          ClusterConfig    `json:"cluster"`
+	Embedder         EmbedderConfig   `json:"embedder"`
+	SeedsPath        string           `json:"seedsPath"`
+	UseNDC           bool             `json:"useNdc"`
+	ColumnCandidates ColumnCandidates `json:"columnCandidates"`
 }
 
 // Clone creates a deep copy of the configuration so callers can mutate safely.
@@ -92,4 +93,5 @@ func (c *Config) ApplyDefaults() {
 	if c.Embedder.MaxSeqLen == 0 {
 		c.Embedder.MaxSeqLen = 512
 	}
+	c.ColumnCandidates = c.ColumnCandidates.withDefaults()
 }
