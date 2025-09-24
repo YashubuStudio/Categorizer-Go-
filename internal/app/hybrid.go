@@ -361,7 +361,7 @@ var rawCategoryRules = map[string]keywordRuleSet{
 	},
 }
 
-var compiledCategoryRules = compileCategoryRules(rawCategoryRules)
+var defaultCompiledCategoryRules = compileCategoryRules(rawCategoryRules)
 
 var vrCategoryKeySet = buildVRCategoryKeySet()
 
@@ -392,18 +392,22 @@ func computeBaseScores(vec []float32, cands []Candidate) map[string]float32 {
 	return scores
 }
 
-func applyHybridScoring(text string, cands []Candidate, baseScores map[string]float32, seedBias float32) ([]Suggestion, map[string]float32, map[string]float32) {
+func applyHybridScoring(text string, cands []Candidate, baseScores map[string]float32, seedBias float32, rules map[string]compiledRuleSet) ([]Suggestion, map[string]float32, map[string]float32) {
 	ruleBonus := make(map[string]float32, len(cands))
 	finalScores := make(map[string]float32, len(cands))
+
+	if len(rules) == 0 {
+		rules = defaultCompiledCategoryRules
+	}
 
 	hasVRSignal := false
 	for _, c := range cands {
 		base := baseScores[c.Label]
-		rules, ok := compiledCategoryRules[c.Key]
+		compiled, ok := rules[c.Key]
 		if !ok {
-			rules = compiledRuleSet{}
+			compiled = compiledRuleSet{}
 		}
-		strongHits, weakHits, antiHits := countRuleHits(text, rules)
+		strongHits, weakHits, antiHits := countRuleHits(text, compiled)
 		bonus := computeRuleBonus(strongHits, weakHits, antiHits)
 		ruleBonus[c.Label] = bonus
 
