@@ -9,6 +9,7 @@ const (
 
 	fyneAppID       = "studio.yashubu.categorizer"
 	defaultSeedFile = "config/categories_seed.txt"
+	defaultRuleFile = "config/category_rules.json"
 )
 
 var modeChoices = []struct {
@@ -46,25 +47,27 @@ type Config struct {
 	TokenizerPath string
 	MaxSeqLen     int
 
-	CacheDir string
-	SeedFile string
+	CacheDir         string
+	SeedFile         string
+	CategoryRuleFile string
 }
 
 func defaultConfig() Config {
 	return Config{
-		TopK:          3,
-		Mode:          ModeMixed,
-		UseNDC:        true,
-		WeightNDC:     0.85,
-		SeedBias:      0.03,
-		Thresh:        Threshold{Top1: 0.45, Margin12: 0.03, Mean: 0.50},
-		ClusterCfg:    ClusterCfg{Enabled: false, Threshold: 0.80},
-		OrtDLL:        "./onnixruntime-win/lib/onnxruntime.dll",
-		ModelPath:     "./models/bge-m3/model.onnx",
-		TokenizerPath: "./models/bge-m3/tokenizer.json",
-		MaxSeqLen:     512,
-		CacheDir:      "./cache",
-		SeedFile:      defaultSeedFile,
+		TopK:             3,
+		Mode:             ModeMixed,
+		UseNDC:           true,
+		WeightNDC:        0.85,
+		SeedBias:         0.03,
+		Thresh:           Threshold{Top1: 0.45, Margin12: 0.03, Mean: 0.50},
+		ClusterCfg:       ClusterCfg{Enabled: false, Threshold: 0.80},
+		OrtDLL:           "./onnixruntime-win/lib/onnxruntime.dll",
+		ModelPath:        "./models/bge-m3/model.onnx",
+		TokenizerPath:    "./models/bge-m3/tokenizer.json",
+		MaxSeqLen:        512,
+		CacheDir:         "./cache",
+		SeedFile:         defaultSeedFile,
+		CategoryRuleFile: defaultRuleFile,
 	}
 }
 
@@ -105,5 +108,6 @@ func sanitizeConfig(cfg Config) Config {
 		cfg.Thresh.Mean = 0.50
 	}
 	cfg.SeedFile = strings.TrimSpace(cfg.SeedFile)
+	cfg.CategoryRuleFile = strings.TrimSpace(cfg.CategoryRuleFile)
 	return cfg
 }

@@ -9,6 +9,7 @@ func Run() error {
 	cfg := defaultConfig()
 	ensureDirs(cfg.CacheDir)
 	ensureSeedFile(cfg.SeedFile, defaultUserCategories)
+	ensureCategoryRuleFile(cfg.CategoryRuleFile, rawCategoryRules)
 
 	svc, err := NewService(cfg)
 	if err != nil {

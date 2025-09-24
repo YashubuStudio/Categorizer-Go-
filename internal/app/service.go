@@ -14,16 +14,17 @@ import (
 )
 
 type Service struct {
-	mu       sync.RWMutex
-	cfg      Config
-	emb      *emb.Encoder
-	cache    *embedCache
-	userCats []string
-	ndcItems []ndcItem
-	candsCat []Candidate
-	candsNDC []Candidate
-	seedVec  map[string][]float32
-	ndcVec   map[string][]float32
+	mu            sync.RWMutex
+	cfg           Config
+	emb           *emb.Encoder
+	cache         *embedCache
+	userCats      []string
+	ndcItems      []ndcItem
+	candsCat      []Candidate
+	candsNDC      []Candidate
+	categoryRules map[string]compiledRuleSet
+	seedVec       map[string][]float32
+	ndcVec        map[string][]float32
 }
 
 func NewService(cfg Config) (*Service, error) {
@@ -49,12 +50,24 @@ func NewService(cfg Config) (*Service, error) {
 		fmt.Printf("カテゴリシードを %s から読み込みました (%d件)\n", cfg.SeedFile, len(initialCats))
 	}
 
+	categoryRules, ruleFromFile, ruleErr := loadCompiledCategoryRules(cfg.CategoryRuleFile)
+	if ruleErr != nil {
+		if errors.Is(ruleErr, os.ErrNotExist) {
+			fmt.Printf("カテゴリルールファイルが見つかりませんでした (%s): %v\n", cfg.CategoryRuleFile, ruleErr)
+		} else {
+			fmt.Printf("カテゴリルールファイルの読み込みに失敗しました (%s): %v\n", cfg.CategoryRuleFile, ruleErr)
+		}
+	} else if ruleFromFile {
+		fmt.Printf("カテゴリルールを %s から読み込みました (%dカテゴリ)\n", cfg.CategoryRuleFile, len(categoryRules))
+	}
+
 	svc := &Service{
-		cfg:      cfg,
-		emb:      enc,
-		cache:    newEmbedCache(cfg.CacheDir, filepath.Base(cfg.ModelPath)),
-		userCats: initialCats,
-		ndcItems: append([]ndcItem(nil), defaultNDCLabels...),
+		cfg:           cfg,
+		emb:           enc,
+		cache:         newEmbedCache(cfg.CacheDir, filepath.Base(cfg.ModelPath)),
+		userCats:      initialCats,
+		ndcItems:      append([]ndcItem(nil), defaultNDCLabels...),
+		categoryRules: categoryRules,
 	}
 
 	if err := svc.refreshNDCCandidates(context.Background()); err != nil {
@@ -82,9 +95,27 @@ func (s *Service) Config() Config {
 
 func (s *Service) UpdateConfig(cfg Config) Config {
 	cfg = sanitizeConfig(cfg)
+	var prevRuleFile string
 	s.mu.Lock()
+	prevRuleFile = s.cfg.CategoryRuleFile
 	s.cfg = cfg
 	s.mu.Unlock()
+
+	if cfg.CategoryRuleFile != prevRuleFile {
+		rules, fromFile, err := loadCompiledCategoryRules(cfg.CategoryRuleFile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				fmt.Printf("カテゴリルールファイルが見つかりませんでした (%s): %v\n", cfg.CategoryRuleFile, err)
+			} else {
+				fmt.Printf("カテゴリルールファイルの読み込みに失敗しました (%s): %v\n", cfg.CategoryRuleFile, err)
+			}
+		} else if fromFile {
+			fmt.Printf("カテゴリルールを %s から読み込みました (%dカテゴリ)\n", cfg.CategoryRuleFile, len(rules))
+		}
+		s.mu.Lock()
+		s.categoryRules = rules
+		s.mu.Unlock()
+	}
 	return cfg
 }
 
@@ -211,6 +242,7 @@ func (s *Service) RankOne(ctx context.Context, text string) (ResultRow, error) {
 	cfg := s.cfg
 	catCands := append([]Candidate(nil), s.candsCat...)
 	ndcCands := append([]Candidate(nil), s.candsNDC...)
+	rules := s.categoryRules
 	seedVec := cloneVecMap(s.seedVec)
 	ndcVec := cloneVecMap(s.ndcVec)
 	s.mu.RUnlock()
@@ -218,7 +250,7 @@ func (s *Service) RankOne(ctx context.Context, text string) (ResultRow, error) {
 	topK := cfg.TopK
 
 	baseScores := computeBaseScores(vec, catCands)
-	hybridAll, ruleBonus, finalScores := applyHybridScoring(normalized, catCands, baseScores, cfg.SeedBias)
+	hybridAll, ruleBonus, finalScores := applyHybridScoring(normalized, catCands, baseScores, cfg.SeedBias, rules)
 	seeds := truncateSuggestions(hybridAll, topK)
 
 	row.BaseScores = baseScores
