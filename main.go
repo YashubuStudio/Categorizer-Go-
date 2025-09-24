@@ -45,6 +45,8 @@ const (
 	ModeSeeded = "seeded"
 	ModeMixed  = "mixed"
 	ModeSplit  = "split"
+
+	fyneAppID = "studio.yashubu.categorizer"
 )
 
 var modeChoices = []struct {
@@ -1426,7 +1428,7 @@ func main() {
 	}
 	defer svc.Close()
 
-	a := app.New()
+	a := app.NewWithID(fyneAppID)
 	u := buildUI(a, svc)
 	u.w.ShowAndRun()
 }
