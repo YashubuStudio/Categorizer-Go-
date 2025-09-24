@@ -88,7 +88,7 @@ func main() {
 				showError(win, fmt.Errorf("シードの読み込みに失敗しました: %w", err))
 				return
 			}
-			fyneApp.Driver().RunOnMain(func() {
+                       fyneApp.Driver().CallOnMain(func() {
 				seedStatus.SetText(fmt.Sprintf("シード数: %d", service.SeedCount()))
 			})
 		}(seeds)
@@ -191,7 +191,7 @@ func main() {
 		localCfg := service.Config()
 		includeNDC := localCfg.Mode == categorizer.ModeSplit && localCfg.UseNDC
 		tableData = buildTableData(rows, localCfg.TopK, includeNDC)
-		fyne.CurrentApp().Driver().RunOnMain(func() {
+               fyne.CurrentApp().Driver().CallOnMain(func() {
 			if len(tableData) > 0 {
 				for col := range tableData[0] {
 					width := float32(150)
@@ -219,7 +219,7 @@ func main() {
 			rows, err := service.ClassifyAll(ctx, texts)
 			elapsed := time.Since(start)
 			if err != nil {
-				fyne.CurrentApp().Driver().RunOnMain(func() {
+                               fyne.CurrentApp().Driver().CallOnMain(func() {
 					classifyBtn.Enable()
 					statusLabel.SetText("エラーが発生しました")
 					showError(win, err)
@@ -227,7 +227,7 @@ func main() {
 				return
 			}
 			updateTable(rows)
-			fyne.CurrentApp().Driver().RunOnMain(func() {
+                       fyne.CurrentApp().Driver().CallOnMain(func() {
 				classifyBtn.Enable()
 				statusLabel.SetText(fmt.Sprintf("%d件 %.2fs", len(rows), elapsed.Seconds()))
 			})
