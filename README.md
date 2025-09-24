@@ -91,6 +91,23 @@ Categorizer は、ユーザーが指定したカテゴリシードと日本十�
   ```
 - 分類が完了すると `分類結果を <出力パス> に保存しました` が表示され、結果 CSV が `--output-dir`（未指定時は `csv/`）に生成されます。【F:main.go†L139-L144】
 
+### Windows CMD からの実行（CLI バイナリ）
+- Windows で GUI を開かずに分類を行いたい場合は、専用 CLI バイナリ `categorizer-cli` をビルドして実行できます。【F:cmd/categorizer-cli/main.go†L39-L129】
+- プロジェクト直下で次のコマンドを実行すると、`bin/categorizer-cli.exe` が生成されます（`bin` ディレクトリは自動作成されません）。【F:cmd/categorizer-cli/main.go†L1-L264】
+  ```bash
+  go build -o bin/categorizer-cli.exe ./cmd/categorizer-cli
+  ```
+- Command Prompt からは、`config.json` と同じディレクトリで次のように実行します。入力データとカテゴリ定義は必須です。【F:cmd/categorizer-cli/main.go†L39-L129】
+  ```cmd
+  bin\categorizer-cli.exe ^
+    --input .\inputs.tsv ^
+    --categories .\seeds.csv ^
+    --output .\csv\result_cli.csv ^
+    --stdout
+  ```
+- `--input-index-column` や `--input-body-column`、`--category-column` などのオプションで列を明示でき、`--stdout` を付けると上位候補が CMD 上に表示されます。【F:cmd/categorizer-cli/main.go†L46-L241】
+- `--output` を省略した場合は `csv/result_YYYYMMDDhhmmss.csv` が自動生成され、既定で GUI アプリと同じ列構成で保存されます。【F:cmd/categorizer-cli/main.go†L139-L199】
+
 ## CLI デバッグモード
 - GUI を経由せずにシードの読み込みやテキスト分類を一通り再現したい場合は、`--debug-` 系フラグを付けて CLI モードを起動できます。【F:main.go†L36-L104】【F:main.go†L126-L229】
 - 例: シード CSV を読み込み、正規化済みシードを `seeds_normalized.txt` に書き出した上でテキストファイルを分類し、ログをすべて標準出力に流すには次のコマンドを実行します。
