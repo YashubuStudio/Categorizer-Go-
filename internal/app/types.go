@@ -1,4 +1,4 @@
-package main
+package app
 
 type Candidate struct {
 	Label  string
