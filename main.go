@@ -1000,11 +1000,12 @@ func saveResultsCSV(outputDir string, records []categorizer.InputRecord, rows []
 	if len(records) != len(rows) {
 		return "", fmt.Errorf("records/results length mismatch: %d vs %d", len(records), len(rows))
 	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return "", fmt.Errorf("create output dir: %w", err)
+	dir, err := ensureOutputDir(outputDir)
+	if err != nil {
+		return "", err
 	}
 	filename := fmt.Sprintf("result_%s.csv", time.Now().Format("200601021504"))
-	path := filepath.Join(outputDir, filename)
+	path := filepath.Join(dir, filename)
 	f, err := os.Create(path)
 	if err != nil {
 		return "", fmt.Errorf("create result file: %w", err)
@@ -1022,6 +1023,21 @@ func saveResultsCSV(outputDir string, records []categorizer.InputRecord, rows []
 		return "", fmt.Errorf("flush result: %w", err)
 	}
 	return path, nil
+}
+
+func ensureOutputDir(outputDir string) (string, error) {
+	dir := strings.TrimSpace(outputDir)
+	if dir == "" {
+		dir = "csv"
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve output dir: %w", err)
+	}
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		return "", fmt.Errorf("create output dir %s: %w", absDir, err)
+	}
+	return absDir, nil
 }
 
 func pickBestSuggestion(row categorizer.ResultRow) (categorizer.Suggestion, bool) {
