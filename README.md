@@ -37,9 +37,9 @@ Categorizer は、ユーザーが指定したカテゴリシードと日本十�
     "threshold": 0.8
   },
   "embedder": {
-    "ortDll": "C:/onnxruntime/lib/onnxruntime.dll",
-    "modelPath": "C:/models/bge-m3/model.onnx",
-    "tokenizerPath": "C:/models/bge-m3/tokenizer.json",
+    "ortDll": "./onnixruntime-win/lib/onnxruntime.dll",
+    "modelPath": "./models/bge-m3/model.onnx",
+    "tokenizerPath": "./models/bge-m3/tokenizer.json",
     "maxSeqLen": 512,
     "cacheDir": "./cache",
     "modelId": "bge-m3"

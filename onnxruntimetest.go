@@ -2,14 +2,8 @@ package main
 
 // legacy main for manual encoder testing. Retained but disabled so the primary
 // application can define its own main in main.go.
-import (
-	"fmt"
-	"log"
-	"os"
 
-	"yashubustudio/categorizer/emb"
-)
-
+/*
 func main() {
 	fmt.Println("このバイナリはGUIアプリの開発用に残されたONNX Runtimeサンプルです。")
 	fmt.Println("環境変数 RUN_ONNX_EXAMPLE=1 を指定すると旧来のデモを実行します。")
@@ -44,7 +38,7 @@ func main() {
 	fmt.Printf("dim=%d\n", len(va))
 	fmt.Printf("cosine(a,b)=%.3f\n", cosine(va, vb))
 }
-
+*/
 func cosine(a, b []float32) float64 {
 	var dot, na, nb float64
 	for i := range a {
