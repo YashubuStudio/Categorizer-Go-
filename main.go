@@ -192,26 +192,6 @@ var defaultUserCategories = []string{
 	"社会",
 }
 
-type ndcItem struct{ Code, Label string }
-
-var defaultNDCLabels = []ndcItem{
-	{"000", "総記"},
-	{"007", "情報科学"},
-	{"100", "哲学"},
-	{"200", "歴史"},
-	{"300", "社会科学"},
-	{"336", "経営"},
-	{"657", "会計"},
-	{"400", "自然科学"},
-	{"491", "医学"},
-	{"498", "衛生学.公衆衛生.予防医学"},
-	{"500", "技術・工学"},
-	{"600", "産業"},
-	{"700", "芸術・美術"},
-	{"800", "言語"},
-	{"900", "文学"},
-}
-
 // ------------------------------
 // 埋め込みキャッシュ（メモリ＋ディスク）
 // ------------------------------
@@ -868,19 +848,19 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 	controlRow1 := container.NewGridWithColumns(3, u.classifyBtn, u.exportBtn, settingsBtn)
 	controlRow2 := container.NewGridWithColumns(2, u.loadBtn, u.catBtn)
 	left := container.NewVBox(
-		widget.NewLabelWithStyle("入力テキスト", fyne.TextAlignStart, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("入力テキスト", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewMax(u.input),
 		controlRow1,
 		controlRow2,
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("進捗", fyne.TextAlignStart, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("進捗", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		u.progress,
 		u.status,
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("設定サマリ", fyne.TextAlignStart, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("設定サマリ", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		u.configSummary,
 		widget.NewSeparator(),
-		widget.NewLabelWithStyle("ログ", fyne.TextAlignStart, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("ログ", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewMax(u.log),
 	)
 
@@ -1017,26 +997,25 @@ func (u *uiState) onClassify() {
 
 	go func(entries []string) {
 		rows, err := u.service.ClassifyAll(context.Background(), entries, func(done, total int) {
-			fyne.CurrentApp().Driver().RunOnMain(func() {
-				u.progress.SetValue(float64(done))
-				u.status.SetText(fmt.Sprintf("処理中 %d/%d", done, total))
-			})
+			// そのまま更新してOK（Fyneはスレッドセーフ）
+			u.progress.SetValue(float64(done))
+			u.status.SetText(fmt.Sprintf("処理中 %d/%d", done, total))
 		})
-		fyne.CurrentApp().Driver().RunOnMain(func() {
-			u.setBusy(false)
-			u.progress.Hide()
-			if err != nil {
-				dialog.ShowError(err, u.w)
-				u.status.SetText("エラー")
-				u.appendLog(fmt.Sprintf("エラー: %v", err))
-				return
-			}
-			u.rows = rows
-			u.resTbl.Refresh()
-			elapsed := time.Since(start).Seconds()
-			u.status.SetText(fmt.Sprintf("完了 %d件 (%.1fs)", len(rows), elapsed))
-			u.appendLog(fmt.Sprintf("分類完了 %d件 (%.1fs)", len(rows), elapsed))
-		})
+
+		// ここも直接更新でOK
+		u.setBusy(false)
+		u.progress.Hide()
+		if err != nil {
+			dialog.ShowError(err, u.w)
+			u.status.SetText("エラー")
+			u.appendLog(fmt.Sprintf("エラー: %v", err))
+			return
+		}
+		u.rows = rows
+		u.resTbl.Refresh()
+		elapsed := time.Since(start).Seconds()
+		u.status.SetText(fmt.Sprintf("完了 %d件 (%.1fs)", len(rows), elapsed))
+		u.appendLog(fmt.Sprintf("分類完了 %d件 (%.1fs)", len(rows), elapsed))
 	}(lines)
 }
 
