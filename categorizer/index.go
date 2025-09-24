@@ -1,6 +1,7 @@
 package categorizer
 
 import (
+	"container/heap"
 	"math"
 	"sort"
 	"sync"
@@ -68,23 +69,75 @@ func (idx *InMemoryIndex) Search(vec []float32, k int) []Hit {
 	if len(items) == 0 || len(vec) == 0 || k <= 0 {
 		return nil
 	}
-	hits := make([]Hit, 0, len(items))
+	if k > len(items) {
+		k = len(items)
+	}
+	hitHeap := &hitMinHeap{}
+	heap.Init(hitHeap)
 	for _, it := range items {
 		score := cosineSimilarity(vec, it.Vector)
-		hits = append(hits, Hit{
+		candidate := Hit{
 			Label:  it.Label,
 			Score:  score,
 			Source: it.Source,
-			Vector: cloneVector(it.Vector),
-		})
+			Vector: it.Vector,
+		}
+		if hitHeap.Len() < k {
+			heap.Push(hitHeap, candidate)
+			continue
+		}
+		worst := (*hitHeap)[0]
+		if hitBetter(candidate, worst) {
+			heap.Pop(hitHeap)
+			heap.Push(hitHeap, candidate)
+		}
+	}
+	if hitHeap.Len() == 0 {
+		return nil
+	}
+	hits := make([]Hit, hitHeap.Len())
+	for i := range hits {
+		hits[i] = heap.Pop(hitHeap).(Hit)
 	}
 	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Score == hits[j].Score {
+			return hits[i].Label < hits[j].Label
+		}
 		return hits[i].Score > hits[j].Score
 	})
-	if len(hits) > k {
-		hits = hits[:k]
-	}
 	return hits
+}
+
+type hitMinHeap []Hit
+
+func (h hitMinHeap) Len() int { return len(h) }
+
+func (h hitMinHeap) Less(i, j int) bool {
+	if h[i].Score == h[j].Score {
+		return h[i].Label > h[j].Label
+	}
+	return h[i].Score < h[j].Score
+}
+
+func (h hitMinHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *hitMinHeap) Push(x any) {
+	*h = append(*h, x.(Hit))
+}
+
+func (h *hitMinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func hitBetter(a, b Hit) bool {
+	if a.Score == b.Score {
+		return a.Label < b.Label
+	}
+	return a.Score > b.Score
 }
 
 func cosineSimilarity(a, b []float32) float32 {
