@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -151,6 +152,9 @@ func runGUIMode() {
 		pendingRecords    []categorizer.InputRecord
 		usePendingRecords bool
 		ignoreTextChange  bool
+
+		seedJobSeq      atomic.Uint64
+		latestSeedJobID atomic.Uint64
 	)
 
 	cfgMu := sync.Mutex{}
@@ -170,16 +174,24 @@ func runGUIMode() {
 	seedStatus := widget.NewLabel("シード未設定")
 
 	applySeeds := func(seeds []string) {
-		fyne.Do(func() {
-			seedStatus.SetText("シード更新中...")
-		})
 		list := append([]string(nil), seeds...)
-		logger.Printf("シード更新リクエスト: %d件", len(list))
-		go func(items []string) {
+		jobID := seedJobSeq.Add(1)
+		latestSeedJobID.Store(jobID)
+		logger.Printf("シード更新リクエスト: %d件 (job=%d)", len(list), jobID)
+		go func(items []string, id uint64) {
+			fyne.Do(func() {
+				if latestSeedJobID.Load() != id {
+					return
+				}
+				seedStatus.SetText("シード更新中...")
+			})
 			start := time.Now()
 			if err := service.LoadSeeds(ctx, items); err != nil {
 				logger.Printf("シード更新失敗 (%d件, 所要時間: %s): %v", len(items), time.Since(start), err)
 				fyne.Do(func() {
+					if latestSeedJobID.Load() != id {
+						return
+					}
 					seedStatus.SetText("シード更新失敗")
 					showError(win, fmt.Errorf("シードの読み込みに失敗しました: %w", err))
 				})
@@ -187,9 +199,12 @@ func runGUIMode() {
 			}
 			logger.Printf("シード更新完了: 登録=%d件, 所要時間: %s", service.SeedCount(), time.Since(start))
 			fyne.Do(func() {
+				if latestSeedJobID.Load() != id {
+					return
+				}
 				seedStatus.SetText(fmt.Sprintf("シード数: %d", service.SeedCount()))
 			})
-		}(list)
+		}(list, jobID)
 	}
 
 	loadSeedsFromInput := func() {
