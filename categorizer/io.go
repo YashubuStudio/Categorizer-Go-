@@ -12,14 +12,6 @@ import (
 	"strings"
 )
 
-var (
-	textColumnCandidates     = []string{"text", "本文", "content", "body", "message", "発表抜粋"}
-	titleColumnCandidates    = []string{"title", "タイトル", "発表のタイトル", "題名", "名称"}
-	summaryColumnCandidates  = []string{"summary", "概要", "description", "発表の概要", "本文", "発表抜粋"}
-	indexColumnCandidates    = []string{"id", "index", "no", "番号", "発表インデックス"}
-	categoryColumnCandidates = []string{"カテゴリ", "カテゴリー", "category"}
-)
-
 // InputParseOptions allows callers to choose which CSV columns map to record fields.
 type InputParseOptions struct {
 	IndexColumn string
@@ -307,16 +299,17 @@ func resolveInputColumns(header []string, opts InputParseOptions) (resolvedColum
 		Text:  columnResult{Index: -1},
 	}
 	var err error
-	if res.Index, err = pickColumn(header, opts.IndexColumn, indexColumnCandidates); err != nil {
+	candidates := getColumnCandidates()
+	if res.Index, err = pickColumn(header, opts.IndexColumn, candidates.Index); err != nil {
 		return res, false, err
 	}
-	if res.Title, err = pickColumn(header, opts.TitleColumn, titleColumnCandidates); err != nil {
+	if res.Title, err = pickColumn(header, opts.TitleColumn, candidates.Title); err != nil {
 		return res, false, err
 	}
-	if res.Body, err = pickColumn(header, opts.BodyColumn, summaryColumnCandidates); err != nil {
+	if res.Body, err = pickColumn(header, opts.BodyColumn, candidates.Body); err != nil {
 		return res, false, err
 	}
-	if res.Text, err = pickColumn(header, opts.TextColumn, textColumnCandidates); err != nil {
+	if res.Text, err = pickColumn(header, opts.TextColumn, candidates.Text); err != nil {
 		return res, false, err
 	}
 	skipHeader := res.Index.FromHeader || res.Title.FromHeader || res.Body.FromHeader || res.Text.FromHeader
@@ -414,7 +407,8 @@ func resolveCategoryColumn(header []string, explicit string) (int, int, error) {
 		}
 		return idx, start, nil
 	}
-	col := findColumn(header, categoryColumnCandidates)
+	candidates := getColumnCandidates()
+	col := findColumn(header, candidates.Category)
 	start := 0
 	if col >= 0 {
 		start = 1
@@ -497,7 +491,8 @@ func ReadCategoryFileMetadata(path string) (CategoryFileMetadata, error) {
 		header[i] = cleanCell(cell)
 	}
 	meta.Columns = header
-	col := findColumn(header, categoryColumnCandidates)
+	candidates := getColumnCandidates()
+	col := findColumn(header, candidates.Category)
 	if col >= 0 {
 		meta.Suggested = header[col]
 		if meta.Suggested == "" {
