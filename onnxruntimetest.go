@@ -5,11 +5,17 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"yashubustudio/categorizer/emb"
 )
 
 func main() {
+	fmt.Println("このバイナリはGUIアプリの開発用に残されたONNX Runtimeサンプルです。")
+	fmt.Println("環境変数 RUN_ONNX_EXAMPLE=1 を指定すると旧来のデモを実行します。")
+	if os.Getenv("RUN_ONNX_EXAMPLE") != "1" {
+		return
+	}
 	enc := &emb.Encoder{}
 	cfg := emb.Config{
 		OrtDLL:        `D:\\Ollama\\projects\\csv-search\\onnixruntime-win\\lib\\onnxruntime.dll`,
