@@ -1251,16 +1251,31 @@ func (u *uiState) onLoadFile() {
 			dialog.ShowError(err, u.w)
 			return
 		}
-		lines, err := parseInputFile(rc.URI(), data)
-		if err != nil {
-			dialog.ShowError(err, u.w)
+		uri := rc.URI()
+		ext := strings.ToLower(filepath.Ext(uri.Path()))
+		if ext == ".csv" || ext == ".tsv" {
+			delim := ','
+			if ext == ".tsv" {
+				delim = '\t'
+			}
+			records, err := readCSVRecords(data, delim)
+			if err != nil {
+				dialog.ShowError(err, u.w)
+				return
+			}
+			u.handleCSVRecords(uri, records)
 			return
 		}
-		u.input.SetText(strings.Join(lines, "\n"))
-		u.appendLog(fmt.Sprintf("ファイル読込: %s (%d件)", filepath.Base(rc.URI().Path()), len(lines)))
+		lines := splitNonEmptyLines(string(data))
+		u.applyLoadedLines(uri, lines)
 	}, u.w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".txt", ".csv", ".tsv"}))
 	fd.Show()
+}
+
+func (u *uiState) applyLoadedLines(uri fyne.URI, lines []string) {
+	u.input.SetText(strings.Join(lines, "\n"))
+	u.appendLog(fmt.Sprintf("ファイル読込: %s (%d件)", filepath.Base(uri.Path()), len(lines)))
 }
 
 func (u *uiState) onLoadCategories() {
@@ -1289,6 +1304,69 @@ func (u *uiState) onLoadCategories() {
 	}, u.w)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".txt", ".csv"}))
 	fd.Show()
+}
+
+func (u *uiState) handleCSVRecords(uri fyne.URI, records [][]string) {
+	maxCols := 0
+	for _, row := range records {
+		if len(row) > maxCols {
+			maxCols = len(row)
+		}
+	}
+	if maxCols == 0 {
+		dialog.ShowError(errors.New("CSVが空です"), u.w)
+		return
+	}
+	defaultCol := detectTextColumn(records[0])
+	hasHeader := false
+	if defaultCol >= 0 {
+		hasHeader = true
+	} else {
+		defaultCol = 0
+	}
+	if defaultCol >= maxCols {
+		defaultCol = 0
+	}
+	if maxCols == 1 {
+		lines := extractCSVColumn(records, defaultCol, hasHeader)
+		u.applyLoadedLines(uri, lines)
+		return
+	}
+	choices := buildCSVColumnChoices(records, hasHeader)
+	if len(choices) == 0 {
+		dialog.ShowError(errors.New("有効な列が見つかりません"), u.w)
+		return
+	}
+	defaultChoice := 0
+	for i, c := range choices {
+		if c.Index == defaultCol {
+			defaultChoice = i
+			break
+		}
+	}
+	options := make([]string, len(choices))
+	for i, c := range choices {
+		options[i] = c.Label
+	}
+	selectedCol := choices[defaultChoice].Index
+	selectWidget := widget.NewSelect(options, func(value string) {
+		for i, opt := range options {
+			if opt == value {
+				selectedCol = choices[i].Index
+				return
+			}
+		}
+	})
+	selectWidget.SetSelected(options[defaultChoice])
+	info := widget.NewLabel("読み込む列を選択してください")
+	content := container.NewVBox(info, selectWidget)
+	dialog.NewCustomConfirm("列の選択", "読み込む", "キャンセル", content, func(ok bool) {
+		if !ok {
+			return
+		}
+		lines := extractCSVColumn(records, selectedCol, hasHeader)
+		u.applyLoadedLines(uri, lines)
+	}, u.w).Show()
 }
 
 // ------------------------------
@@ -1359,21 +1437,7 @@ func splitNonEmptyLines(s string) []string {
 	return lines
 }
 
-func parseInputFile(uri fyne.URI, data []byte) ([]string, error) {
-	ext := strings.ToLower(filepath.Ext(uri.Path()))
-	switch ext {
-	case ".csv", ".tsv":
-		delim := ','
-		if ext == ".tsv" {
-			delim = '\t'
-		}
-		return parseCSVTexts(data, delim)
-	default:
-		return splitNonEmptyLines(string(data)), nil
-	}
-}
-
-func parseCSVTexts(data []byte, delim rune) ([]string, error) {
+func readCSVRecords(data []byte, delim rune) ([][]string, error) {
 	r := csv.NewReader(bytes.NewReader(data))
 	r.Comma = delim
 	records, err := r.ReadAll()
@@ -1383,12 +1447,13 @@ func parseCSVTexts(data []byte, delim rune) ([]string, error) {
 	if len(records) == 0 {
 		return nil, errors.New("CSVが空です")
 	}
-	idx := detectTextColumn(records[0])
+	return records, nil
+}
+
+func extractCSVColumn(records [][]string, idx int, hasHeader bool) []string {
 	start := 0
-	if idx >= 0 {
+	if hasHeader {
 		start = 1
-	} else {
-		idx = 0
 	}
 	res := make([]string, 0, len(records))
 	for i := start; i < len(records); i++ {
@@ -1401,7 +1466,65 @@ func parseCSVTexts(data []byte, delim rune) ([]string, error) {
 			res = append(res, val)
 		}
 	}
-	return res, nil
+	return res
+}
+
+type csvColumnChoice struct {
+	Index int
+	Label string
+}
+
+func buildCSVColumnChoices(records [][]string, hasHeader bool) []csvColumnChoice {
+	maxCols := 0
+	for _, row := range records {
+		if len(row) > maxCols {
+			maxCols = len(row)
+		}
+	}
+	choices := make([]csvColumnChoice, 0, maxCols)
+	for col := 0; col < maxCols; col++ {
+		header := fmt.Sprintf("列%d", col+1)
+		if hasHeader && len(records) > 0 && col < len(records[0]) {
+			h := strings.TrimSpace(records[0][col])
+			if h != "" {
+				header = h
+			}
+		}
+		sample := csvColumnSample(records, col, hasHeader)
+		label := fmt.Sprintf("[%d] %s", col+1, header)
+		if sample != "" {
+			label = fmt.Sprintf("%s (例: %s)", label, sample)
+		}
+		choices = append(choices, csvColumnChoice{Index: col, Label: label})
+	}
+	return choices
+}
+
+func csvColumnSample(records [][]string, col int, hasHeader bool) string {
+	start := 0
+	if hasHeader {
+		start = 1
+	}
+	for i := start; i < len(records); i++ {
+		row := records[i]
+		if col >= len(row) {
+			continue
+		}
+		val := strings.TrimSpace(row[col])
+		if val == "" {
+			continue
+		}
+		return truncateSampleValue(val, 20)
+	}
+	return ""
+}
+
+func truncateSampleValue(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "…"
 }
 
 func detectTextColumn(header []string) int {
