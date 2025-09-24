@@ -8,7 +8,7 @@ Categorizer は、ユーザーが指定したカテゴリシードと日本十�
 - **NDC 辞書連携**: 組み込みの NDC 辞書を自動ベクトル化し、ユーザー指定のモードに応じてランキングへ加味します。【F:categorizer/service.go†L39-L108】【F:categorizer/ndc.go†L1-L26】
 - **一括分類**: 複数行テキストや CSV/TSV から抽出した文章をまとめて推論し、スコア付きの候補リストを返します。【F:main.go†L174-L239】【F:categorizer/io.go†L34-L109】
 - **結果の表示・保存**: 推論結果をテーブルで可視化し、詳細ダイアログや CSV エクスポートで共有できます。【F:main.go†L136-L239】
-- **柔軟な設定**: ランキングモード、Top-K、シードバイアス、最小スコア、クラスタリングの閾値、NDC 使用可否などを GUI から即時反映し、自動で `config.json` に保存します。【F:main.go†L241-L372】【F:categorizer/config.go†L12-L58】
+- **柔軟な設定**: ランキングモード、Top-K（最大5件）、NDC重み、クラスタリングの閾値、NDC 使用可否などを GUI から即時反映し、自動で `config.json` に保存します。【F:main.go†L639-L773】【F:categorizer/config.go†L12-L69】
 
 ## 動作環境
 - Go 1.24 以降。【F:go.mod†L1-L4】
@@ -23,15 +23,14 @@ Categorizer は、ユーザーが指定したカテゴリシードと日本十�
    go mod tidy
    ```
 2. ONNX Runtime の動的ライブラリと使用する埋め込みモデル (例: bge-m3) をダウンロードし、パスを控えておきます。【F:emb/emb.go†L33-L131】
-3. アプリと同じディレクトリに `config.json` を作成し、下記のように埋め込み設定や初期値を記述します。未指定の値は起動時に自動補完されます。【F:categorizer/config.go†L12-L58】【F:categorizer/types.go†L25-L68】
+3. アプリと同じディレクトリに `config.json` を作成し、下記のように埋め込み設定や初期値を記述します。未指定の値は起動時に自動補完されます。【F:categorizer/config.go†L12-L69】【F:categorizer/types.go†L60-L99】
 
 ### config.json の例
 ```json
 {
   "mode": "mixed",
   "topK": 3,
-  "seedBias": 0.03,
-  "minScore": 0.35,
+  "weightNdc": 0.85,
   "cluster": {
     "enabled": false,
     "threshold": 0.8
@@ -81,9 +80,8 @@ Categorizer は、ユーザーが指定したカテゴリシードと日本十�
 
 ## 設定項目の詳細
 - **Mode** (`seeded` / `mixed` / `split`): シードのみ、シード+NDC 混合、シードと NDC を別リストで提示するモードを選択します。【F:categorizer/types.go†L5-L23】【F:main.go†L241-L254】
-- **Top-K**: 候補数。スライダで 1〜5 の範囲を指定します。【F:main.go†L255-L269】
-- **シードバイアス**: シード候補への加点値。`mixed` モード時のランキングに影響します。【F:main.go†L270-L285】【F:categorizer/service.go†L168-L189】
-- **最小スコア**: 指定値未満の候補を除外します。【F:main.go†L286-L301】【F:categorizer/service.go†L147-L167】
+- **Top-K**: 候補数。スライダで 3〜5 の範囲を指定します。【F:main.go†L649-L668】
+- **NDC重み**: NDC 候補のスコアに掛ける重み。0.70〜1.00 の範囲で調整できます。【F:main.go†L670-L685】【F:categorizer/service.go†L160-L215】
 - **類似カテゴリを束ねる**: ON にすると、類似スコアが閾値以上の候補をまとめて表示します。【F:main.go†L302-L331】【F:categorizer/cluster.go†L1-L62】
 - **NDC 提案を使用**: NDC 辞書のロード／解除を切り替えます。【F:main.go†L332-L342】【F:categorizer/service.go†L39-L108】
 

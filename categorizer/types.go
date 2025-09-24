@@ -2,6 +2,11 @@ package categorizer
 
 import "encoding/json"
 
+const (
+	minTopK = 3
+	maxTopK = 5
+)
+
 // Mode represents the ranking mode for suggestions.
 type Mode string
 
@@ -56,8 +61,7 @@ type EmbedderConfig struct {
 type Config struct {
 	Mode             Mode             `json:"mode"`
 	TopK             int              `json:"topK"`
-	SeedBias         float32          `json:"seedBias"`
-	MinScore         float32          `json:"minScore"`
+	WeightNDC        float32          `json:"weightNdc"`
 	Cluster          ClusterConfig    `json:"cluster"`
 	Embedder         EmbedderConfig   `json:"embedder"`
 	SeedsPath        string           `json:"seedsPath"`
@@ -78,14 +82,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Mode == "" {
 		c.Mode = ModeMixed
 	}
-	if c.TopK <= 0 {
-		c.TopK = 3
+	c.TopK = clampTopK(c.TopK)
+	if c.WeightNDC <= 0 {
+		c.WeightNDC = 0.85
 	}
-	if c.SeedBias == 0 {
-		c.SeedBias = 0.03
-	}
-	if c.MinScore == 0 {
-		c.MinScore = 0.35
+	if c.WeightNDC > 1 {
+		c.WeightNDC = 1
 	}
 	if c.Cluster.Threshold == 0 {
 		c.Cluster.Threshold = 0.8
@@ -94,4 +96,14 @@ func (c *Config) ApplyDefaults() {
 		c.Embedder.MaxSeqLen = 512
 	}
 	c.ColumnCandidates = c.ColumnCandidates.withDefaults()
+}
+
+func clampTopK(k int) int {
+	if k < minTopK {
+		return minTopK
+	}
+	if k > maxTopK {
+		return maxTopK
+	}
+	return k
 }
