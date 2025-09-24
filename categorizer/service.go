@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Service orchestrates embedding, ranking and clustering based on the plan specification.
@@ -70,11 +71,13 @@ func (s *Service) UpdateConfig(cfg Config) {
 
 // LoadNDCDictionary embeds and stores the provided entries.
 func (s *Service) LoadNDCDictionary(ctx context.Context, entries []NDCEntry) error {
+	start := time.Now()
 	if len(entries) == 0 {
 		s.ndcIdx.Replace(nil)
 		s.logf("NDC dictionary cleared")
 		return nil
 	}
+	s.logf("Loading %d NDC entries", len(entries))
 	texts := make([]string, len(entries))
 	labels := make([]string, len(entries))
 	for i, entry := range entries {
@@ -84,6 +87,7 @@ func (s *Service) LoadNDCDictionary(ctx context.Context, entries []NDCEntry) err
 	}
 	vecs, err := s.embedder.EmbedTexts(ctx, texts)
 	if err != nil {
+		s.logf("Failed to embed NDC dictionary after %s: %v", time.Since(start), err)
 		return fmt.Errorf("embed ndc dictionary: %w", err)
 	}
 	items := make([]VectorItem, len(entries))
@@ -95,12 +99,13 @@ func (s *Service) LoadNDCDictionary(ctx context.Context, entries []NDCEntry) err
 		}
 	}
 	s.ndcIdx.Replace(items)
-	s.logf("Loaded %d NDC entries", len(items))
+	s.logf("Loaded %d NDC entries in %s", len(items), time.Since(start))
 	return nil
 }
 
 // LoadSeeds embeds the provided seed categories and replaces the current index.
 func (s *Service) LoadSeeds(ctx context.Context, seeds []string) error {
+	start := time.Now()
 	cleaned := make([]string, 0, len(seeds))
 	seen := make(map[string]struct{})
 	for _, seed := range seeds {
@@ -120,8 +125,10 @@ func (s *Service) LoadSeeds(ctx context.Context, seeds []string) error {
 		s.logf("Seed list cleared")
 		return nil
 	}
+	s.logf("Embedding %d seed categories", len(cleaned))
 	vecs, err := s.embedder.EmbedTexts(ctx, cleaned)
 	if err != nil {
+		s.logf("Failed to embed seeds after %s: %v", time.Since(start), err)
 		return fmt.Errorf("embed seeds: %w", err)
 	}
 	items := make([]VectorItem, len(cleaned))
@@ -133,7 +140,7 @@ func (s *Service) LoadSeeds(ctx context.Context, seeds []string) error {
 		}
 	}
 	s.seedsIdx.Replace(items)
-	s.logf("Loaded %d seed categories", len(items))
+	s.logf("Loaded %d seed categories in %s", len(items), time.Since(start))
 	return nil
 }
 
@@ -144,16 +151,27 @@ func (s *Service) SeedCount() int {
 
 // ClassifyAll embeds all texts and returns ranked suggestions.
 func (s *Service) ClassifyAll(ctx context.Context, texts []string) ([]ResultRow, error) {
+	start := time.Now()
+	total := len(texts)
+	s.logf("ClassifyAll start: %d texts (seeds=%d ndc=%d)", total, s.SeedCount(), s.ndcIdx.Size())
+	normalizeStart := time.Now()
 	cfg := s.Config()
 	normTexts := NormalizeAll(texts)
+	normalizeDur := time.Since(normalizeStart)
+	embedStart := time.Now()
 	vecs, err := s.embedder.EmbedTexts(ctx, normTexts)
 	if err != nil {
+		s.logf("ClassifyAll failed during embedding after %s: %v", time.Since(embedStart), err)
 		return nil, fmt.Errorf("embed texts: %w", err)
 	}
+	embedDur := time.Since(embedStart)
 	rows := make([]ResultRow, 0, len(texts))
+	rankStart := time.Now()
 	for i, vec := range vecs {
 		rows = append(rows, s.rankForVector(vec, texts[i], cfg))
 	}
+	rankDur := time.Since(rankStart)
+	s.logf("ClassifyAll completed: %d texts (normalize=%s embed=%s rank=%s total=%s)", len(rows), normalizeDur, embedDur, rankDur, time.Since(start))
 	return rows, nil
 }
 
