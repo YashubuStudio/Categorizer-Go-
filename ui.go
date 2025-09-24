@@ -9,15 +9,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+const logDebounceInterval = 150 * time.Millisecond
 
 type tableColumn struct {
 	Title  string
@@ -38,6 +42,12 @@ type uiState struct {
 	resTbl        *widget.Table
 	columns       []tableColumn
 	rows          []ResultRow
+	statusBind    binding.String
+	logBind       binding.String
+	progressBind  binding.Float
+	logLines      []string
+	logMu         sync.Mutex
+	logUpdateCh   chan struct{}
 
 	classifyBtn *widget.Button
 	exportBtn   *widget.Button
@@ -50,15 +60,23 @@ func buildUI(a fyne.App, svc *Service) *uiState {
 	u.cfg = svc.Config()
 	u.w = a.NewWindow("Vector Categorizer - Seeded & NDC")
 
+	u.statusBind = binding.NewString()
+	_ = u.statusBind.Set("準備完了")
+	u.progressBind = binding.NewFloat()
+	u.logBind = binding.NewString()
+	u.startLogUpdater()
+
 	u.input = widget.NewMultiLineEntry()
 	u.input.SetPlaceHolder("ここに文章を入力（1行=1件）")
 
-	u.log = widget.NewMultiLineEntry()
+	u.log = widget.NewEntryWithData(u.logBind)
+	u.log.MultiLine = true
+	u.log.Wrapping = fyne.TextWrapWord
 	u.log.SetPlaceHolder("処理ログ")
 	u.log.Disable()
 
-	u.status = widget.NewLabel("準備完了")
-	u.progress = widget.NewProgressBar()
+	u.status = widget.NewLabelWithData(u.statusBind)
+	u.progress = widget.NewProgressBarWithData(u.progressBind)
 	u.progress.Hide()
 	u.configSummary = widget.NewLabel("")
 
@@ -205,30 +223,103 @@ func (u *uiState) rebuildTableColumns(cfg Config) {
 }
 
 func (u *uiState) setBusy(b bool) {
-	if b {
-		u.classifyBtn.Disable()
-		u.exportBtn.Disable()
-		u.loadBtn.Disable()
-		u.catBtn.Disable()
-	} else {
-		u.classifyBtn.Enable()
-		u.exportBtn.Enable()
-		u.loadBtn.Enable()
-		u.catBtn.Enable()
-	}
+	fyne.Do(func() {
+		if b {
+			u.classifyBtn.Disable()
+			u.exportBtn.Disable()
+			u.loadBtn.Disable()
+			u.catBtn.Disable()
+		} else {
+			u.classifyBtn.Enable()
+			u.exportBtn.Enable()
+			u.loadBtn.Enable()
+			u.catBtn.Enable()
+		}
+	})
 }
 
 func (u *uiState) appendLog(msg string) {
 	now := time.Now().Format("15:04:05")
 	line := fmt.Sprintf("[%s] %s", now, msg)
-	lines := append(strings.Split(u.log.Text, "\n"), line)
-	if len(lines) > 1 && lines[0] == "" {
-		lines = lines[1:]
+
+	u.logMu.Lock()
+	u.logLines = append(u.logLines, line)
+	if len(u.logLines) > 200 {
+		u.logLines = u.logLines[len(u.logLines)-200:]
 	}
-	if len(lines) > 200 {
-		lines = lines[len(lines)-200:]
+	u.logMu.Unlock()
+
+	if u.logUpdateCh == nil {
+		u.flushLog()
+		return
 	}
-	u.log.SetText(strings.Join(lines, "\n"))
+	select {
+	case u.logUpdateCh <- struct{}{}:
+	default:
+	}
+}
+
+func (u *uiState) startLogUpdater() {
+	if u.logUpdateCh != nil {
+		return
+	}
+	u.logUpdateCh = make(chan struct{}, 1)
+	go u.logUpdateLoop()
+}
+
+func (u *uiState) logUpdateLoop() {
+	timer := time.NewTimer(logDebounceInterval)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	for {
+		select {
+		case <-u.logUpdateCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(logDebounceInterval)
+		case <-timer.C:
+			u.flushLog()
+		}
+	}
+}
+
+func (u *uiState) flushLog() {
+	u.logMu.Lock()
+	text := strings.Join(u.logLines, "\n")
+	u.logMu.Unlock()
+	_ = u.logBind.Set(text)
+}
+
+func (u *uiState) setStatus(text string) {
+	_ = u.statusBind.Set(text)
+}
+
+func (u *uiState) configureProgress(min, max float64) {
+	fyne.Do(func() {
+		u.progress.Min = min
+		u.progress.Max = max
+	})
+}
+
+func (u *uiState) setProgressValue(value float64) {
+	_ = u.progressBind.Set(value)
+}
+
+func (u *uiState) showProgress() {
+	fyne.Do(func() {
+		u.progress.Show()
+	})
+}
+
+func (u *uiState) hideProgress() {
+	fyne.Do(func() {
+		u.progress.Hide()
+	})
 }
 
 func (u *uiState) updateConfigSummary() {
@@ -261,34 +352,37 @@ func (u *uiState) onClassify() {
 		return
 	}
 	total := len(lines)
-	u.progress.Min = 0
-	u.progress.Max = float64(total)
-	u.progress.SetValue(0)
-	u.progress.Refresh()
-	u.progress.Show()
-	u.status.SetText("処理中...")
+	u.configureProgress(0, float64(total))
+	u.setProgressValue(0)
+	u.showProgress()
+	u.setStatus("処理中...")
 	u.setBusy(true)
 	u.appendLog(fmt.Sprintf("分類開始 (%d件)", total))
 	start := time.Now()
 
 	go func(entries []string) {
 		rows, err := u.service.ClassifyAll(context.Background(), entries, func(done, total int) {
-			u.progress.SetValue(float64(done))
-			u.status.SetText(fmt.Sprintf("処理中 %d/%d", done, total))
+			u.setProgressValue(float64(done))
+			u.setStatus(fmt.Sprintf("処理中 %d/%d", done, total))
 		})
 
 		u.setBusy(false)
-		u.progress.Hide()
+		u.hideProgress()
 		if err != nil {
-			dialog.ShowError(err, u.w)
-			u.status.SetText("エラー")
+			fyne.Do(func() {
+				dialog.ShowError(err, u.w)
+			})
+			u.setStatus("エラー")
 			u.appendLog(fmt.Sprintf("エラー: %v", err))
 			return
 		}
-		u.rows = rows
-		u.resTbl.Refresh()
+		fyne.Do(func() {
+			u.rows = rows
+			u.resTbl.Refresh()
+		})
 		elapsed := time.Since(start).Seconds()
-		u.status.SetText(fmt.Sprintf("完了 %d件 (%.1fs)", len(rows), elapsed))
+		u.setProgressValue(float64(len(rows)))
+		u.setStatus(fmt.Sprintf("完了 %d件 (%.1fs)", len(rows), elapsed))
 		u.appendLog(fmt.Sprintf("分類完了 %d件 (%.1fs)", len(rows), elapsed))
 	}(lines)
 }
