@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -151,6 +152,9 @@ func runGUIMode() {
 		pendingRecords    []categorizer.InputRecord
 		usePendingRecords bool
 		ignoreTextChange  bool
+
+		seedJobSeq      atomic.Uint64
+		latestSeedJobID atomic.Uint64
 	)
 
 	cfgMu := sync.Mutex{}
@@ -170,14 +174,24 @@ func runGUIMode() {
 	seedStatus := widget.NewLabel("シード未設定")
 
 	applySeeds := func(seeds []string) {
-		seedStatus.SetText("シード更新中...")
 		list := append([]string(nil), seeds...)
-		logger.Printf("シード更新リクエスト: %d件", len(list))
-		go func(items []string) {
+		jobID := seedJobSeq.Add(1)
+		latestSeedJobID.Store(jobID)
+		logger.Printf("シード更新リクエスト: %d件 (job=%d)", len(list), jobID)
+		go func(items []string, id uint64) {
+			fyne.Do(func() {
+				if latestSeedJobID.Load() != id {
+					return
+				}
+				seedStatus.SetText("シード更新中...")
+			})
 			start := time.Now()
 			if err := service.LoadSeeds(ctx, items); err != nil {
 				logger.Printf("シード更新失敗 (%d件, 所要時間: %s): %v", len(items), time.Since(start), err)
 				fyne.Do(func() {
+					if latestSeedJobID.Load() != id {
+						return
+					}
 					seedStatus.SetText("シード更新失敗")
 					showError(win, fmt.Errorf("シードの読み込みに失敗しました: %w", err))
 				})
@@ -185,9 +199,12 @@ func runGUIMode() {
 			}
 			logger.Printf("シード更新完了: 登録=%d件, 所要時間: %s", service.SeedCount(), time.Since(start))
 			fyne.Do(func() {
+				if latestSeedJobID.Load() != id {
+					return
+				}
 				seedStatus.SetText(fmt.Sprintf("シード数: %d", service.SeedCount()))
 			})
-		}(list)
+		}(list, jobID)
 	}
 
 	loadSeedsFromInput := func() {
@@ -203,7 +220,10 @@ func runGUIMode() {
 	loadSeedsFileBtn := widget.NewButton("シードファイル読込", func() {
 		fd := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
 			if err != nil {
-				showError(win, err)
+				capturedErr := err
+				fyne.Do(func() {
+					showError(win, capturedErr)
+				})
 				return
 			}
 			if rc == nil {
@@ -213,7 +233,10 @@ func runGUIMode() {
 			path := rc.URI().Path()
 			ext := strings.ToLower(filepath.Ext(path))
 			applySeedsFromList := func(seeds []string) {
-				seedInput.SetText(strings.Join(seeds, "\n"))
+				text := strings.Join(seeds, "\n")
+				fyne.Do(func() {
+					seedInput.SetText(text)
+				})
 				cfgMu.Lock()
 				cfg.SeedsPath = path
 				cfgMu.Unlock()
@@ -223,25 +246,33 @@ func runGUIMode() {
 			if ext == ".csv" || ext == ".tsv" {
 				metadata, err := categorizer.ReadCategoryFileMetadata(path)
 				if err != nil {
-					showError(win, err)
+					capturedErr := err
+					fyne.Do(func() {
+						showError(win, capturedErr)
+					})
 					return
 				}
-				showCategoryColumnSelector(win, path, metadata, func(column string, ok bool) {
-					if !ok {
-						return
-					}
-					seeds, err := categorizer.ParseCategoryListWithOptions(path, categorizer.CategoryParseOptions{Column: column})
-					if err != nil {
-						showError(win, err)
-						return
-					}
-					applySeedsFromList(seeds)
+				fyne.Do(func() {
+					showCategoryColumnSelector(win, path, metadata, func(column string, ok bool) {
+						if !ok {
+							return
+						}
+						seeds, err := categorizer.ParseCategoryListWithOptions(path, categorizer.CategoryParseOptions{Column: column})
+						if err != nil {
+							showError(win, err)
+							return
+						}
+						applySeedsFromList(seeds)
+					})
 				})
 				return
 			}
 			seeds, err := categorizer.ParseSeedFile(path)
 			if err != nil {
-				showError(win, err)
+				capturedErr := err
+				fyne.Do(func() {
+					showError(win, capturedErr)
+				})
 				return
 			}
 			applySeedsFromList(seeds)
@@ -258,7 +289,10 @@ func runGUIMode() {
 		}
 		fd := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
 			if err != nil {
-				showError(win, err)
+				capturedErr := err
+				fyne.Do(func() {
+					showError(win, capturedErr)
+				})
 				return
 			}
 			if wc == nil {
@@ -267,14 +301,19 @@ func runGUIMode() {
 			defer wc.Close()
 			content := strings.Join(seeds, "\n")
 			if _, err := wc.Write([]byte(content)); err != nil {
-				showError(win, fmt.Errorf("シードファイルの保存に失敗しました: %w", err))
+				wrapped := fmt.Errorf("シードファイルの保存に失敗しました: %w", err)
+				fyne.Do(func() {
+					showError(win, wrapped)
+				})
 				return
 			}
 			path := wc.URI().Path()
 			if path == "" {
 				path = wc.URI().String()
 			}
-			seedInput.SetText(content)
+			fyne.Do(func() {
+				seedInput.SetText(content)
+			})
 			cfgMu.Lock()
 			cfg.SeedsPath = path
 			cfgMu.Unlock()
@@ -790,11 +829,17 @@ func runGUIMode() {
 		go func() {
 			if checked {
 				if err := service.LoadNDCDictionary(ctx, categorizer.DefaultNDCEntries()); err != nil {
-					showError(win, err)
+					capturedErr := err
+					fyne.Do(func() {
+						showError(win, capturedErr)
+					})
 				}
 			} else {
 				if err := service.LoadNDCDictionary(ctx, nil); err != nil {
-					showError(win, err)
+					capturedErr := err
+					fyne.Do(func() {
+						showError(win, capturedErr)
+					})
 				}
 			}
 		}()
